@@ -202,7 +202,7 @@ describe('views/detail', () => {
     );
   });
 
-  test('renders comments section with author and timestamp', async () => {
+  test('renders comments section with author, timestamp, and markdown', async () => {
     document.body.innerHTML =
       '<section class="panel"><div id="mount"></div></section>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
@@ -216,7 +216,7 @@ describe('views/detail', () => {
         {
           id: 1,
           author: 'Alice',
-          text: 'This is a comment',
+          text: 'This is a **comment** with a [link](https://example.com)',
           created_at: '2025-01-15T10:30:00Z'
         },
         {
@@ -252,6 +252,47 @@ describe('views/detail', () => {
     const firstComment = commentItems[0];
     expect(firstComment.textContent).toContain('Alice');
     expect(firstComment.textContent).toContain('This is a comment');
+    const commentLink = /** @type {HTMLAnchorElement|null} */ (
+      firstComment.querySelector('.comment-text a')
+    );
+    expect(commentLink?.getAttribute('href')).toBe('https://example.com');
+    expect(firstComment.querySelector('.comment-text strong')?.textContent).toBe(
+      'comment'
+    );
+  });
+
+  test('renders notes as markdown', async () => {
+    document.body.innerHTML =
+      '<section class="panel"><div id="mount"></div></section>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+
+    const issue = {
+      id: 'UI-109',
+      title: 'Markdown notes',
+      notes: 'Notes with **bold** text and a [link](https://example.com)',
+      dependencies: [],
+      dependents: [],
+      comments: []
+    };
+
+    const stores = {
+      snapshotFor(/** @type {string} */ id) {
+        return id === 'detail:UI-109' ? [issue] : [];
+      },
+      subscribe() {
+        return () => {};
+      }
+    };
+
+    const view = createDetailView(mount, async () => ({}), undefined, stores);
+    await view.load('UI-109');
+
+    const notes = /** @type {HTMLElement|null} */ (mount.querySelector('.notes .md'));
+    expect(notes?.textContent).toContain('Notes with bold text');
+    expect(notes?.querySelector('strong')?.textContent).toBe('bold');
+    expect(
+      /** @type {HTMLAnchorElement|null} */ (notes?.querySelector('a'))?.getAttribute('href')
+    ).toBe('https://example.com');
   });
 
   test('shows placeholder when no comments', async () => {

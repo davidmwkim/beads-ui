@@ -1009,6 +1009,31 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       });
     }
 
+    try {
+      const saved_debug = window.localStorage.getItem('beads-ui.board-debug');
+      const debug_switch = /** @type {HTMLInputElement|null} */ (
+        document.getElementById('board-debug-switch')
+      );
+      if (debug_switch) {
+        debug_switch.checked =
+          saved_debug === '1' || saved_debug === 'true' || saved_debug === 'on';
+        debug_switch.addEventListener('change', () => {
+          const enabled = debug_switch.checked;
+          window.localStorage.setItem(
+            'beads-ui.board-debug',
+            enabled ? '1' : '0'
+          );
+          window.dispatchEvent(
+            new CustomEvent('beads-ui:board-debug-changed', {
+              detail: { enabled }
+            })
+          );
+        });
+      }
+    } catch {
+      // ignore debug toggle init errors
+    }
+
     /** @type {HTMLElement|null} */
     const app_root = document.getElementById('app');
     if (app_root) {

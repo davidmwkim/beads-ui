@@ -1,8 +1,10 @@
 import { html, render } from 'lit-html';
+import { repeat } from 'lit-html/directives/repeat.js';
 import { createListSelectors } from '../data/list-selectors.js';
 import { cmpClosedDesc, cmpPriorityThenCreated } from '../data/sort.js';
 import { createIssueIdRenderer } from '../utils/issue-id-renderer.js';
 import { debug } from '../utils/logging.js';
+import { renderMarkdown } from '../utils/markdown.js';
 import { createPriorityBadge } from '../utils/priority-badge.js';
 import { showToast } from '../utils/toast.js';
 import { createTypeBadge } from '../utils/type-badge.js';
@@ -14,10 +16,42 @@ import { createTypeBadge } from '../utils/type-badge.js';
  *   status?: 'open'|'in_progress'|'closed',
  *   priority?: number,
  *   issue_type?: string,
+ *   assignee?: string,
  *   created_at?: number,
  *   updated_at?: number,
- *   closed_at?: number
+ *   closed_at?: number,
+ *   comment_count?: number,
+ *   labels?: string[],
+ *   last_comment_at?: string,
+ *   notes?: string,
+ *   latest_prompt?: string,
+ *   latest_response?: string,
+  *   response_pending?: boolean
  * }} IssueLite
+ */
+
+/**
+ * @typedef {{
+ *   level: 'idle'|'seconds'|'minutes'|'hour'|'hours',
+ *   indicator: 'none'|'healthy'|'missed',
+ *   runtime_ms: number|null,
+ *   heartbeat_ts: number|null,
+ *   heartbeat_age_ms: number|null,
+ *   is_missed: boolean,
+ *   summary: string
+ * }} CardHealth
+ */
+
+/**
+ * @typedef {{
+ *   id: string,
+ *   column_id: string,
+ *   status: string,
+ *   last_comment_ts: number|null,
+ *   latest_prompt_sig: string,
+ *   latest_response_sig: string,
+ *   heartbeat_ts: number|null
+ * }} CardRenderState
  */
 
 /**
@@ -31,6 +65,204 @@ const COLUMN_STATUS_MAP = {
   'in-progress-col': 'in_progress',
   'closed-col': 'closed'
 };
+
+const HEARTBEAT_LABEL_PREFIX = 'last-heartbeat:';
+const RUNTIME_LABEL_PREFIX = 'time-alive:';
+const MODEL_PROVIDER_LABEL_PREFIX = 'model-provider:';
+const MODEL_LABEL_PREFIX = 'model:';
+const HEARTBEAT_EXPECTED_DEFAULT_MS = 5 * 60 * 1000;
+const HEARTBEAT_EXPECTED_LONG_RUNNING_MS = 10 * 60 * 1000;
+const HEALTH_LEVEL_CLASSES = [
+  'board-card--seconds',
+  'board-card--minutes',
+  'board-card--hour',
+  'board-card--hours'
+];
+const DEBUG_SIMULATION_INITIAL = [
+  {
+    id: 'DBG-B1',
+    title: 'Blocked by upstream dependency',
+    status: 'open',
+    priority: 1,
+    issue_type: 'task',
+    comment_count: 0,
+    created_at: Date.now() - 60 * 60 * 1000,
+    labels: ['debug', 'lane:blocked']
+  },
+  {
+    id: 'DBG-R1',
+    title: 'Ready for pickup',
+    status: 'open',
+    priority: 1,
+    issue_type: 'feature',
+    comment_count: 1,
+    created_at: Date.now() - 30 * 60 * 1000,
+    labels: ['debug', 'lane:ready']
+  },
+  {
+    id: 'DBG-P1',
+    title: 'Fresh worker started seconds ago',
+    status: 'in_progress',
+    priority: 0,
+    issue_type: 'task',
+    assignee: 'agent-alpha',
+    comment_count: 2,
+    created_at: Date.now() - 20 * 1000,
+    labels: [
+      'debug',
+      'pid:4242',
+      'last-heartbeat:' + new Date(Date.now() - 20 * 1000).toISOString(),
+      'time-alive:20s'
+    ],
+    latest_prompt: [
+      'Kick off the worker and confirm the first heartbeat lands.',
+      '',
+      '- post a heartbeat every 3s',
+      '- keep retries below `3`'
+    ].join('\n'),
+    latest_response: [
+      'Worker is online.',
+      '',
+      '```text',
+      'status=ok',
+      'latency_ms=42',
+      'heartbeat=steady',
+      '```'
+    ].join('\n'),
+    notes: [
+      'Worker is online.',
+      '',
+      '```text',
+      'status=ok',
+      'latency_ms=42',
+      'heartbeat=steady',
+      '```'
+    ].join('\n')
+  },
+  {
+    id: 'DBG-P2',
+    title: 'Healthy worker running for minutes',
+    status: 'in_progress',
+    priority: 1,
+    issue_type: 'task',
+    assignee: 'agent-beta',
+    comment_count: 1,
+    created_at: Date.now() - 18 * 60 * 1000,
+    labels: [
+      'debug',
+      'pid:4310',
+      'last-heartbeat:' + new Date(Date.now() - 70 * 1000).toISOString(),
+      'time-alive:18m'
+    ],
+    latest_prompt: [
+      'Continue processing the active queue.',
+      '',
+      '- keep scan latency under 500ms',
+      '- flush metrics on each loop'
+    ].join('\n'),
+    latest_response: [
+      'Queue is draining normally.',
+      '',
+      '```text',
+      'status=ok',
+      'processed=14',
+      '```'
+    ].join('\n'),
+    notes: [
+      'Queue is draining normally.',
+      '',
+      '```text',
+      'status=ok',
+      'processed=14',
+      '```'
+    ].join('\n')
+  },
+  {
+    id: 'DBG-P3',
+    title: 'Long-running worker active for hours',
+    status: 'in_progress',
+    priority: 1,
+    issue_type: 'task',
+    assignee: 'agent-gamma',
+    comment_count: 1,
+    created_at: Date.now() - 2 * 60 * 60 * 1000,
+    labels: [
+      'debug',
+      'pid:4477',
+      'last-heartbeat:' + new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+      'time-alive:2h14m'
+    ],
+    latest_prompt: [
+      'Keep the long-running reconciliation task healthy.',
+      '',
+      '- checkpoint every 5 minutes',
+      '- report progress at each batch boundary'
+    ].join('\n'),
+    latest_response: [
+      'Batch processing is still healthy.',
+      '',
+      '```text',
+      'status=ok',
+      'batches_complete=9',
+      '```'
+    ].join('\n'),
+    notes: [
+      'Batch processing is still healthy.',
+      '',
+      '```text',
+      'status=ok',
+      'batches_complete=9',
+      '```'
+    ].join('\n')
+  },
+  {
+    id: 'DBG-P4',
+    title: 'Heartbeat overdue for more than an hour',
+    status: 'in_progress',
+    priority: 0,
+    issue_type: 'task',
+    assignee: 'agent-delta',
+    comment_count: 1,
+    created_at: Date.now() - 3 * 60 * 60 * 1000,
+    labels: [
+      'debug',
+      'pid:4555',
+      'last-heartbeat:' + new Date(Date.now() - 66 * 60 * 1000).toISOString(),
+      'time-alive:3h2m'
+    ],
+    latest_prompt: [
+      'Investigate the stalled worker and decide whether to restart it.',
+      '',
+      '1. confirm last durable checkpoint',
+      '2. inspect upstream dependency health'
+    ].join('\n'),
+    latest_response: [
+      '> heartbeat overdue by more than an hour',
+      '',
+      'Waiting on upstream dependency before next emit.'
+    ].join('\n'),
+    notes: [
+      '> heartbeat overdue by more than an hour',
+      '',
+      'Waiting on upstream dependency before next emit.'
+    ].join('\n')
+  },
+  {
+    id: 'DBG-C1',
+    title: 'Recently closed neutral ticket',
+    status: 'closed',
+    priority: 2,
+    issue_type: 'chore',
+    comment_count: 1,
+    created_at: Date.now() - 2 * 60 * 60 * 1000,
+    closed_at: Date.now() - 8 * 60 * 1000,
+    labels: [
+      'debug',
+      'last-heartbeat:' + new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      'time-alive:2h'
+    ]
+  }
+];
 
 /**
  * Create the Board view with Blocked, Ready, In progress, Closed.
@@ -69,6 +301,28 @@ export function createBoardView(
   let list_closed = [];
   /** @type {IssueLite[]} */
   let list_closed_raw = [];
+  /** @type {Map<string, CardRenderState>} */
+  let previous_card_state = new Map();
+  /** @type {Map<string, DOMRect>} */
+  let previous_card_positions = new Map();
+  /** @type {Map<string, number|null>} */
+  let comment_timestamp_cache = new Map();
+  /** @type {Map<string, { latest_prompt?: string, latest_response?: string, response_pending?: boolean }>} */
+  let comment_preview_cache = new Map();
+  /** @type {Set<string>} */
+  let pending_comment_fetches = new Set();
+  /** @type {Map<string, number>} */
+  let previous_column_counts = new Map();
+  /** @type {ReturnType<typeof setInterval>|null} */
+  let display_timer = null;
+  /** @type {boolean} */
+  let board_debug_enabled = isBoardDebugEnabled();
+  /** @type {IssueLite[]} */
+  let debug_issues = [];
+  /** @type {ReturnType<typeof setInterval>[]} */
+  let debug_timers = [];
+  /** @type {number} */
+  let debug_sequence = 1;
   // Centralized selection helpers
   const selectors = issueStores ? createListSelectors(issueStores) : null;
 
@@ -95,11 +349,13 @@ export function createBoardView(
 
   function template() {
     return html`
-      <div class="panel__body board-root">
-        ${columnTemplate('Blocked', 'blocked-col', list_blocked)}
-        ${columnTemplate('Ready', 'ready-col', list_ready)}
-        ${columnTemplate('In Progress', 'in-progress-col', list_in_progress)}
-        ${columnTemplate('Closed', 'closed-col', list_closed)}
+      <div class="panel__body">
+        <div class="board-root">
+          ${columnTemplate('Blocked', 'blocked-col', list_blocked)}
+          ${columnTemplate('Ready', 'ready-col', list_ready)}
+          ${columnTemplate('In Progress', 'in-progress-col', list_in_progress)}
+          ${columnTemplate('Closed', 'closed-col', list_closed)}
+        </div>
       </div>
     `;
   }
@@ -155,7 +411,7 @@ export function createBoardView(
           role="list"
           aria-labelledby=${id + '-header'}
         >
-          ${items.map((it) => cardTemplate(it))}
+          ${repeat(items, (it) => it.id, (it) => cardTemplate(it))}
         </div>
       </section>
     `;
@@ -165,10 +421,21 @@ export function createBoardView(
    * @param {IssueLite} it
    */
   function cardTemplate(it) {
+    const health = deriveCardHealth(it);
+    const last_comment_ts = deriveLastCommentTimestamp(it);
+    const last_comment_label = formatCommentSummary(last_comment_ts);
+    const dynamic_state = deriveDynamicDisplayState(it, health);
+    const runtime_label = formatRuntimeSummary(dynamic_state.runtime_ms);
+    const preview = deriveCardPreview(it);
     return html`
       <article
-        class="board-card"
+        class=${cardClassName(dynamic_state.health)}
         data-issue-id=${it.id}
+        data-status=${it.status || ''}
+        data-last-comment-ts=${last_comment_ts || ''}
+        data-heartbeat-ts=${health.heartbeat_ts || ''}
+        data-runtime-base-ms=${dynamic_state.base_runtime_ms || ''}
+        data-runtime-ref-ts=${dynamic_state.runtime_ref_ts || ''}
         role="listitem"
         tabindex="-1"
         draggable="true"
@@ -181,8 +448,77 @@ export function createBoardView(
         </div>
         <div class="board-card__meta">
           ${createTypeBadge(it.issue_type)} ${createPriorityBadge(it.priority)}
+          ${renderModelProviderBadge(it)}
+          ${renderModelChip(it)}
+          ${renderWorkerChip(it)}
+          ${runtime_label
+            ? html`<span class="badge board-card__runtime">${runtime_label}</span>`
+            : ''}
+          ${last_comment_label
+            ? html`<span class="badge board-card__comment-count">
+                ${last_comment_label}
+              </span>`
+            : ''}
           ${createIssueIdRenderer(it.id, { class_name: 'mono' })}
         </div>
+        ${dynamic_state.health.indicator !== 'none' || dynamic_state.health.summary
+          ? html`<div class="board-card__statusline">
+              ${dynamic_state.health.summary
+                ? html`<span class="board-card__health">
+                    ${dynamic_state.health.summary}
+                  </span>`
+                : html`<span></span>`}
+              ${dynamic_state.health.indicator === 'healthy'
+                ? html`<span
+                    class="board-card__indicator board-card__indicator--healthy"
+                    aria-label="Heartbeat healthy"
+                    title="Heartbeat healthy"
+                  ></span>`
+                : dynamic_state.health.indicator === 'missed'
+                  ? html`<span
+                      class="board-card__indicator board-card__indicator--missed"
+                      aria-label="Heartbeat missed"
+                      title="Heartbeat missed"
+                    >
+                      !
+                    </span>`
+                  : ''}
+            </div>`
+          : ''}
+        ${it.status === 'in_progress' &&
+        (preview.latest_prompt || preview.latest_response || preview.response_pending)
+          ? html`<div class="board-card__debug-messages">
+              ${preview.latest_prompt
+                ? html`<section
+                    class="board-card__debug-message board-card__debug-message--prompt markdown-body"
+                  >
+                    <div class="board-card__preview-label">Latest Prompt</div>
+                    ${renderMarkdown(preview.latest_prompt)}
+                  </section>`
+                : ''}
+              ${preview.latest_response
+                ? html`<section
+                    class="board-card__debug-message board-card__debug-message--response markdown-body"
+                  >
+                    <div class="board-card__preview-label">Latest Response</div>
+                    ${renderMarkdown(preview.latest_response)}
+                  </section>`
+                : preview.response_pending
+                  ? html`<section
+                      class="board-card__debug-message board-card__debug-message--response board-card__debug-message--loading"
+                    >
+                      <div class="board-card__preview-label">Latest Response</div>
+                      <div class="board-card__loading">
+                        <span
+                          class="board-card__loading-spinner"
+                          aria-hidden="true"
+                        ></span>
+                        <span>Generating response…</span>
+                      </div>
+                    </section>`
+                : ''}
+            </div>`
+          : ''}
       </article>
     `;
   }
@@ -273,6 +609,7 @@ export function createBoardView(
   }
 
   function doRender() {
+    previous_card_positions = captureCardPositions();
     render(template(), mount_element);
     postRenderEnhance();
   }
@@ -286,6 +623,19 @@ export function createBoardView(
    */
   function postRenderEnhance() {
     try {
+      const next_debug = isBoardDebugEnabled();
+      if (next_debug !== board_debug_enabled) {
+        board_debug_enabled = next_debug;
+        if (board_debug_enabled) {
+          startDebugSimulation();
+        } else {
+          stopDebugSimulation();
+          refreshFromStores();
+          return;
+        }
+      }
+      /** @type {Map<string, CardRenderState>} */
+      const next_card_state = new Map();
       /** @type {HTMLElement[]} */
       const columns = Array.from(
         mount_element.querySelectorAll('.board-column')
@@ -305,24 +655,463 @@ export function createBoardView(
         );
         const col_name = header ? header.textContent?.trim() || '' : '';
         for (const card of cards) {
+          const issue_id = String(card.getAttribute('data-issue-id') || '');
           const title_el = /** @type {HTMLElement|null} */ (
             card.querySelector('.board-card__title')
           );
           const t = title_el ? title_el.textContent?.trim() || '' : '';
+          const health_el = /** @type {HTMLElement|null} */ (
+            card.querySelector('.board-card__health')
+          );
+          const health_text = health_el ? health_el.textContent?.trim() || '' : '';
           card.setAttribute(
             'aria-label',
-            `Issue ${t || '(no title)'} — Column ${col_name}`
+            [
+              `Issue ${t || '(no title)'}`,
+              `Column ${col_name}`,
+              health_text
+            ]
+              .filter(Boolean)
+              .join(' - ')
           );
           // Default roving setup
           card.tabIndex = -1;
+          next_card_state.set(issue_id, {
+            id: issue_id,
+            column_id: String(col.id || ''),
+            status: String(card.getAttribute('data-status') || ''),
+            last_comment_ts: parseNumberAttribute(
+              card.getAttribute('data-last-comment-ts')
+            ),
+            latest_prompt_sig: previewSignature(
+              card.querySelector('.board-card__debug-message--prompt')?.textContent || ''
+            ),
+            latest_response_sig: previewSignature(
+              card.querySelector('.board-card__debug-message--response')
+                ?.textContent ||
+                (card.querySelector('.board-card__debug-message--loading')
+                  ? '__pending__'
+                  : '')
+            ),
+            heartbeat_ts: parseNumberAttribute(
+              card.getAttribute('data-heartbeat-ts')
+            )
+          });
         }
         if (cards.length > 0) {
           cards[0].tabIndex = 0;
         }
+        const count_badge = /** @type {HTMLElement|null} */ (
+          col.querySelector('.board-column__count')
+        );
+        const next_count = cards.length;
+        const prev_count = previous_column_counts.get(String(col.id || ''));
+        if (count_badge && prev_count !== undefined && prev_count !== next_count) {
+          restartAnimation(count_badge, 'board-column__count--bump');
+        }
+        previous_column_counts.set(String(col.id || ''), next_count);
       }
+      for (const [id, next] of next_card_state.entries()) {
+        const card = /** @type {HTMLElement|null} */ (
+          mount_element.querySelector(`.board-card[data-issue-id="${id}"]`)
+        );
+        if (!card) {
+          continue;
+        }
+        const prev = previous_card_state.get(id);
+        const heartbeat_indicator = /** @type {HTMLElement|null} */ (
+          card.querySelector('.board-card__indicator--healthy')
+        );
+        const has_comment_delta = Boolean(
+          prev &&
+            Number.isFinite(next.last_comment_ts) &&
+            (!Number.isFinite(prev.last_comment_ts) ||
+              /** @type {number} */ (next.last_comment_ts) >
+                /** @type {number|null} */ (prev.last_comment_ts ?? -1))
+        );
+        const has_prompt_delta = Boolean(
+          prev && next.latest_prompt_sig !== prev.latest_prompt_sig
+        );
+        const has_response_delta = Boolean(
+          prev && next.latest_response_sig !== prev.latest_response_sig
+        );
+        const has_status_delta = Boolean(prev && next.status !== prev.status);
+        const has_column_delta = Boolean(
+          prev && next.column_id !== prev.column_id
+        );
+        const has_heartbeat_delta = Boolean(
+          prev &&
+            Number.isFinite(next.heartbeat_ts) &&
+            Number.isFinite(prev.heartbeat_ts) &&
+            /** @type {number} */ (next.heartbeat_ts) >
+              /** @type {number} */ (prev.heartbeat_ts)
+        );
+        if (!prev) {
+          restartAnimation(card, 'board-card--entering');
+        } else if (
+          has_comment_delta ||
+          has_status_delta ||
+          has_column_delta ||
+          has_heartbeat_delta
+        ) {
+          if (has_comment_delta) {
+            const prompt_panel = /** @type {HTMLElement|null} */ (
+              card.querySelector('.board-card__debug-message--prompt')
+            );
+            const response_panel = /** @type {HTMLElement|null} */ (
+              card.querySelector('.board-card__debug-message--response')
+            );
+            if (has_prompt_delta && prompt_panel) {
+              restartAnimation(
+                prompt_panel,
+                'board-card__debug-message--updated'
+              );
+            }
+            if (has_response_delta && response_panel) {
+              restartAnimation(
+                response_panel,
+                'board-card__debug-message--updated'
+              );
+            }
+            const comment_chip = /** @type {HTMLElement|null} */ (
+              card.querySelector('.board-card__comment-count')
+            );
+            if (comment_chip) {
+              restartAnimation(comment_chip, 'board-card__comment-count--updated');
+            }
+          } else {
+            restartAnimation(card, 'board-card--updated');
+          }
+          void has_status_delta;
+          void has_column_delta;
+          if (has_heartbeat_delta && heartbeat_indicator) {
+            restartAnimation(
+              heartbeat_indicator,
+              'board-card__indicator--heartbeat-pulse'
+            );
+          }
+        }
+      }
+      updateDynamicDisplays();
+      previous_card_state = next_card_state;
     } catch {
       // non-fatal
     }
+  }
+
+  function ensureDisplayTimer() {
+    if (display_timer !== null) {
+      return;
+    }
+    display_timer = window.setInterval(() => {
+      updateDynamicDisplays();
+    }, 1000);
+  }
+
+  function stopDisplayTimer() {
+    if (display_timer !== null) {
+      window.clearInterval(display_timer);
+      display_timer = null;
+    }
+  }
+
+  function updateDynamicDisplays() {
+    /** @type {HTMLElement[]} */
+    const cards = Array.from(mount_element.querySelectorAll('.board-card'));
+    for (const card of cards) {
+      const status = String(card.getAttribute('data-status') || '');
+      if (status === 'closed') {
+        continue;
+      }
+      const heartbeat_ts = parseNumberAttribute(
+        card.getAttribute('data-heartbeat-ts')
+      );
+      const base_runtime_ms = parseNumberAttribute(
+        card.getAttribute('data-runtime-base-ms')
+      );
+      const runtime_ref_ts = parseNumberAttribute(
+        card.getAttribute('data-runtime-ref-ts')
+      );
+      const runtime_ms =
+        Number.isFinite(base_runtime_ms) && Number.isFinite(runtime_ref_ts)
+          ? Math.max(
+              0,
+              /** @type {number} */ (base_runtime_ms) +
+                (Date.now() - /** @type {number} */ (runtime_ref_ts))
+            )
+          : base_runtime_ms;
+      const heartbeat_age_ms =
+        Number.isFinite(heartbeat_ts) && heartbeat_ts !== null
+          ? Date.now() - heartbeat_ts
+          : null;
+      const dynamic_health = deriveHealthFromDisplayState(status, runtime_ms, heartbeat_ts, heartbeat_age_ms);
+
+      const runtime_chip = /** @type {HTMLElement|null} */ (
+        card.querySelector('.board-card__runtime')
+      );
+      if (runtime_chip) {
+        const next = formatRuntimeSummary(runtime_ms);
+        if (runtime_chip.textContent !== next) {
+          runtime_chip.textContent = next;
+        }
+      }
+      const health_chip = /** @type {HTMLElement|null} */ (
+        card.querySelector('.board-card__health')
+      );
+      if (health_chip) {
+        const next = dynamic_health.summary;
+        if (health_chip.textContent !== next) {
+          health_chip.textContent = next;
+        }
+      }
+      syncCardHealthClasses(card, dynamic_health);
+    }
+  }
+
+  function replayDebugAnimations() {
+    /** @type {HTMLElement[]} */
+    const cards = Array.from(mount_element.querySelectorAll('.board-card'));
+    for (const sample of cards) {
+      restartAnimation(sample, 'board-card--updated');
+      const indicator = /** @type {HTMLElement|null} */ (
+        sample.querySelector('.board-card__indicator--healthy')
+      );
+      if (indicator) {
+        restartAnimation(
+          indicator,
+          'board-card__indicator--heartbeat-pulse'
+        );
+      }
+    }
+    /** @type {HTMLElement[]} */
+    const counts = Array.from(
+      mount_element.querySelectorAll('.board-column__count')
+    );
+    for (const count of counts) {
+      restartAnimation(count, 'board-column__count--bump');
+    }
+  }
+
+  function startDebugSimulation() {
+    stopDebugSimulation();
+    debug_sequence = 2;
+    debug_issues = DEBUG_SIMULATION_INITIAL.map((issue) => ({
+      ...issue,
+      last_comment_at:
+        issue.comment_count && issue.comment_count > 0
+          ? new Date(Date.now() - 3 * 60 * 1000).toISOString()
+          : undefined
+    }));
+    comment_timestamp_cache = new Map(
+      debug_issues.map((issue) => [issue.id, deriveLastCommentTimestamp(issue)])
+    );
+    refreshFromDebugSimulation();
+    debug_timers.push(
+      window.setInterval(() => {
+        const healthy = debug_issues.find((issue) => issue.id === 'DBG-P1');
+        if (healthy) {
+          healthy.updated_at = Date.now();
+          healthy.labels = replaceLabels(
+            healthy.labels,
+            new Date(),
+            '18m'
+          );
+          if (Math.random() > 0.55) {
+            healthy.comment_count = Number(healthy.comment_count || 0) + 1;
+            healthy.last_comment_at = new Date().toISOString();
+          }
+          refreshFromDebugSimulation();
+        }
+      }, 3000)
+    );
+    debug_timers.push(
+      window.setInterval(() => {
+        mutateDebugSimulation();
+        refreshFromDebugSimulation();
+      }, 4200)
+    );
+  }
+
+  function stopDebugSimulation() {
+    for (const timer of debug_timers) {
+      window.clearInterval(timer);
+    }
+    debug_timers = [];
+  }
+
+  function refreshFromDebugSimulation() {
+    list_blocked = debug_issues
+      .filter((issue) => issue.status === 'open' && hasLane(issue, 'blocked'))
+      .sort(cmpPriorityThenCreated);
+    list_ready = debug_issues
+      .filter((issue) => issue.status === 'open' && !hasLane(issue, 'blocked'))
+      .sort(cmpPriorityThenCreated);
+    list_in_progress = debug_issues
+      .filter((issue) => issue.status === 'in_progress')
+      .sort(cmpPriorityThenCreated);
+    list_closed_raw = debug_issues
+      .filter((issue) => issue.status === 'closed')
+      .sort(cmpClosedDesc);
+    applyClosedFilter();
+    doRender();
+  }
+
+  function mutateDebugSimulation() {
+    const random = Math.random();
+    if (random < 0.24) {
+      addRandomDebugIssue();
+      return;
+    }
+    /** @type {IssueLite[]} */
+    const movable = debug_issues.filter((issue) => issue.id !== 'DBG-P1');
+    if (movable.length === 0) {
+      return;
+    }
+    const target = movable[Math.floor(Math.random() * movable.length)];
+    if (target.status === 'open' && hasLane(target, 'blocked')) {
+      target.labels = withoutLane(target.labels);
+      target.updated_at = Date.now();
+      target.comment_count = Number(target.comment_count || 0) + 1;
+      target.last_comment_at = new Date().toISOString();
+      return;
+    }
+    if (target.status === 'open') {
+      target.status = 'in_progress';
+      target.updated_at = Date.now();
+      target.labels = replaceLabels(target.labels, new Date(), randomRuntime());
+      return;
+    }
+    if (target.status === 'in_progress') {
+      if (Math.random() < 0.3) {
+        target.labels = replaceLabels(
+          target.labels,
+          new Date(Date.now() - 18 * 60 * 1000),
+          '2h14m'
+        );
+        target.updated_at = Date.now();
+        target.comment_count = Number(target.comment_count || 0) + 1;
+        target.last_comment_at = new Date().toISOString();
+        return;
+      }
+      target.status = 'closed';
+      target.closed_at = Date.now();
+      target.updated_at = Date.now();
+      return;
+    }
+    if (target.status === 'closed') {
+      target.status = 'open';
+      target.closed_at = undefined;
+      target.updated_at = Date.now();
+      target.labels = ['debug', 'lane:ready'];
+    }
+  }
+
+  function addRandomDebugIssue() {
+    const id = `DBG-N${debug_sequence++}`;
+    const blocked = Math.random() < 0.35;
+    debug_issues.unshift({
+      id,
+      title: blocked
+        ? `Generated blocked task ${id}`
+        : `Generated ready task ${id}`,
+      status: 'open',
+      priority: Math.floor(Math.random() * 3),
+      issue_type: Math.random() < 0.5 ? 'task' : 'feature',
+      comment_count: Math.floor(Math.random() * 3),
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      last_comment_at:
+        Math.random() > 0.5
+          ? new Date(Date.now() - 90 * 1000).toISOString()
+          : undefined,
+      labels: ['debug', blocked ? 'lane:blocked' : 'lane:ready']
+    });
+  }
+
+  /**
+   * @param {IssueLite[]} issues
+   */
+  function scheduleCommentMetadataRefresh(issues) {
+    if (board_debug_enabled || !transport) {
+      return;
+    }
+    for (const issue of issues) {
+      const issue_id = String(issue.id || '');
+      if (!issue_id) {
+        continue;
+      }
+      const count = Number(issue.comment_count || 0);
+      if (count <= 0) {
+        comment_timestamp_cache.set(issue_id, null);
+        comment_preview_cache.delete(issue_id);
+        issue.last_comment_at = undefined;
+        issue.latest_prompt = undefined;
+        issue.latest_response = undefined;
+        issue.response_pending = undefined;
+        continue;
+      }
+      const cached = comment_timestamp_cache.get(issue_id);
+      if (cached !== undefined) {
+        issue.last_comment_at = cached
+          ? new Date(cached).toISOString()
+          : undefined;
+      }
+      const preview = comment_preview_cache.get(issue_id);
+      if (preview) {
+        issue.latest_prompt = preview.latest_prompt;
+        issue.latest_response = preview.latest_response;
+        issue.response_pending = preview.response_pending;
+      }
+      if (
+        (comment_timestamp_cache.has(issue_id) &&
+          !(Number.isFinite(issue.updated_at) &&
+            (!Number.isFinite(cached) ||
+              /** @type {number} */ (issue.updated_at) >
+                /** @type {number} */ (cached))) ) ||
+        pending_comment_fetches.has(issue_id)
+      ) {
+        continue;
+      }
+      pending_comment_fetches.add(issue_id);
+      void transport('get-comments', { id: issue_id })
+        .then((comments) => {
+          const last_comment_ts = latestCommentTimestamp(comments);
+          const preview = latestCommentPreview(comments);
+          comment_timestamp_cache.set(issue_id, last_comment_ts);
+          comment_preview_cache.set(issue_id, preview);
+          const target = findIssueById(issue_id);
+          if (target) {
+            target.last_comment_at = last_comment_ts
+              ? new Date(last_comment_ts).toISOString()
+              : undefined;
+            target.latest_prompt = preview.latest_prompt;
+            target.latest_response = preview.latest_response;
+            target.response_pending = preview.response_pending;
+          }
+          doRender();
+        })
+        .catch(() => {
+          comment_timestamp_cache.set(issue_id, null);
+          comment_preview_cache.delete(issue_id);
+        })
+        .finally(() => {
+          pending_comment_fetches.delete(issue_id);
+        });
+    }
+  }
+
+  /**
+   * @param {string} issue_id
+   * @returns {IssueLite|undefined}
+   */
+  function findIssueById(issue_id) {
+    return [
+      ...list_blocked,
+      ...list_ready,
+      ...list_in_progress,
+      ...list_closed_raw,
+      ...debug_issues
+    ].find((issue) => String(issue.id) === issue_id);
   }
 
   // Delegate keyboard handling from mount_element
@@ -564,6 +1353,12 @@ export function createBoardView(
           // ignore store errors
         }
       }
+      scheduleCommentMetadataRefresh([
+        ...list_blocked,
+        ...list_ready,
+        ...list_in_progress,
+        ...list_closed_raw
+      ]);
       applyClosedFilter();
       doRender();
     } catch {
@@ -575,6 +1370,10 @@ export function createBoardView(
    * Compose lists from subscriptions + issues store and render.
    */
   function refreshFromStores() {
+    if (board_debug_enabled) {
+      refreshFromDebugSimulation();
+      return;
+    }
     try {
       if (selectors) {
         const in_progress = selectors.selectBoardColumn(
@@ -626,10 +1425,29 @@ export function createBoardView(
     });
   }
 
+  window.addEventListener('beads-ui:board-debug-changed', () => {
+    const next_debug = isBoardDebugEnabled();
+    if (next_debug) {
+      board_debug_enabled = true;
+      startDebugSimulation();
+      doRender();
+      return;
+    }
+    board_debug_enabled = false;
+    stopDebugSimulation();
+    refreshFromStores();
+  });
+
   return {
     async load() {
       // Compose lists from subscriptions + issues store
       log('load');
+      ensureDisplayTimer();
+      board_debug_enabled = isBoardDebugEnabled();
+      if (board_debug_enabled) {
+        startDebugSimulation();
+        return;
+      }
       refreshFromStores();
       // If nothing is present yet (e.g., immediately after switching back
       // to the Board and before list-delta arrives), fetch via data layer as
@@ -713,6 +1531,9 @@ export function createBoardView(
       }
     },
     clear() {
+      stopDisplayTimer();
+      stopDebugSimulation();
+      pending_comment_fetches.clear();
       mount_element.replaceChildren();
       list_ready = [];
       list_blocked = [];
@@ -720,4 +1541,824 @@ export function createBoardView(
       list_closed = [];
     }
   };
+}
+
+/**
+ * @param {IssueLite} issue
+ * @param {string} lane
+ * @returns {boolean}
+ */
+function hasLane(issue, lane) {
+  return Array.isArray(issue.labels)
+    ? issue.labels.includes(`lane:${lane}`)
+    : false;
+}
+
+/**
+ * @param {string[]|undefined} labels
+ * @returns {string[]}
+ */
+function withoutLane(labels) {
+  const next = Array.isArray(labels) ? labels.filter((label) => !/^lane:/.test(label)) : [];
+  next.push('debug');
+  return next;
+}
+
+/**
+ * @param {string[]|undefined} labels
+ * @param {Date} heartbeat
+ * @param {string} runtime
+ * @returns {string[]}
+ */
+function replaceLabels(labels, heartbeat, runtime) {
+  /** @type {string[]} */
+  const next = Array.isArray(labels)
+    ? labels.filter(
+        (label) =>
+          !String(label).startsWith(HEARTBEAT_LABEL_PREFIX) &&
+          !String(label).startsWith(RUNTIME_LABEL_PREFIX)
+      )
+    : [];
+  if (!next.includes('debug')) {
+    next.push('debug');
+  }
+  next.push(`${HEARTBEAT_LABEL_PREFIX}${heartbeat.toISOString()}`);
+  next.push(`${RUNTIME_LABEL_PREFIX}${runtime}`);
+  return next;
+}
+
+/**
+ * @returns {string}
+ */
+function randomRuntime() {
+  const minutes = 4 + Math.floor(Math.random() * 90);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const rem = minutes % 60;
+  return rem > 0 ? `${hours}h${rem}m` : `${hours}h`;
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {number|null}
+ */
+function deriveLastCommentTimestamp(issue) {
+  if (typeof issue.last_comment_at === 'string' && issue.last_comment_at) {
+    const parsed = Date.parse(issue.last_comment_at);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {unknown} comments
+ * @returns {number|null}
+ */
+function latestCommentTimestamp(comments) {
+  if (!Array.isArray(comments) || comments.length === 0) {
+    return null;
+  }
+  let latest = null;
+  for (const comment of comments) {
+    const created_at =
+      comment && typeof comment === 'object'
+        ? /** @type {{ created_at?: unknown }} */ (comment).created_at
+        : undefined;
+    if (typeof created_at !== 'string' || created_at.length === 0) {
+      continue;
+    }
+    const parsed = Date.parse(created_at);
+    if (!Number.isFinite(parsed)) {
+      continue;
+    }
+    latest = latest === null ? parsed : Math.max(latest, parsed);
+  }
+  return latest;
+}
+
+/**
+ * @param {unknown} comments
+ * @returns {{ latest_prompt?: string, latest_response?: string, response_pending?: boolean }}
+ */
+function latestCommentPreview(comments) {
+  if (!Array.isArray(comments) || comments.length === 0) {
+    return {};
+  }
+  const sorted = comments
+    .filter((comment) => comment && typeof comment === 'object')
+    .slice()
+    .sort((a, b) => {
+      const a_ts = Date.parse(
+        String((/** @type {{ created_at?: unknown }} */ (a)).created_at || '')
+      );
+      const b_ts = Date.parse(
+        String((/** @type {{ created_at?: unknown }} */ (b)).created_at || '')
+      );
+      return a_ts - b_ts;
+    });
+  const entries = sorted.map((comment) => ({
+    text: String((/** @type {{ text?: unknown }} */ (comment)).text || '').trim()
+  }));
+  const last = entries[entries.length - 1];
+  const previous = entries.length > 1 ? entries[entries.length - 2] : null;
+  const last_is_response = isResponseComment(last.text);
+  const last_is_prompt = isPromptComment(last.text);
+  let prompt = undefined;
+  let response = undefined;
+  let response_pending = false;
+
+  if (last_is_prompt && !last_is_response) {
+    prompt = last.text;
+    response_pending = true;
+  } else if (last_is_response) {
+    response = collectTrailingResponse(entries);
+    const prior_prompt = findPreviousPrompt(entries, entries.length - 1);
+    prompt = prior_prompt || undefined;
+  } else if (entries.length % 2 === 1) {
+    prompt = last.text;
+    response_pending = true;
+  } else {
+    response = last.text;
+    prompt = previous ? previous.text : undefined;
+  }
+
+  return {
+    latest_prompt: prompt,
+    latest_response: response || undefined,
+    response_pending
+  };
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {{ latest_prompt?: string, latest_response?: string, response_pending?: boolean }}
+ */
+function deriveCardPreview(issue) {
+  const response_from_notes = clipNotesResponsePreview(issue.notes);
+  return {
+    latest_prompt: clipPromptPreview(issue.latest_prompt),
+    latest_response:
+      response_from_notes || clipResponsePreview(issue.latest_response),
+    response_pending: issue.response_pending && !response_from_notes
+  };
+}
+
+/**
+ * @param {string|undefined} markdown
+ * @returns {string}
+ */
+function clipPromptPreview(markdown) {
+  const text = String(markdown || '').trim();
+  if (!text) {
+    return '';
+  }
+  const lines = text.split('\n');
+  if (lines.length <= 20) {
+    return text;
+  }
+  return lines.slice(0, 20).join('\n').trim() + '\n\n...';
+}
+
+/**
+ * @param {string|undefined} markdown
+ * @returns {string}
+ */
+function clipResponsePreview(markdown) {
+  const text = String(markdown || '').trim();
+  if (!text) {
+    return '';
+  }
+  const lines = text.split('\n');
+  if (lines.length <= 20) {
+    return text;
+  }
+  return '...\n\n' + lines.slice(-20).join('\n').trim();
+}
+
+/**
+ * @param {string|undefined} markdown
+ * @returns {string}
+ */
+function clipNotesResponsePreview(markdown) {
+  const text = String(markdown || '').trim();
+  if (!text) {
+    return '';
+  }
+  const lines = text.split('\n');
+  if (lines.length <= 15) {
+    return text;
+  }
+  return '...\n\n' + lines.slice(-15).join('\n').trim();
+}
+
+/**
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isResponseComment(text) {
+  const normalized = String(text || '').trim().toLowerCase();
+  return (
+    normalized.startsWith('[agent output') ||
+    normalized.startsWith('response:') ||
+    normalized.startsWith('assistant:') ||
+    normalized.startsWith('## response') ||
+    normalized.startsWith('**response**') ||
+    normalized.startsWith('**latest response**')
+  );
+}
+
+/**
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isPromptComment(text) {
+  const normalized = String(text || '').trim().toLowerCase();
+  return (
+    normalized.startsWith('prompt:') ||
+    normalized.startsWith('user:') ||
+    normalized.startsWith('## prompt') ||
+    normalized.startsWith('**prompt**') ||
+    normalized.startsWith('**latest prompt**')
+  );
+}
+
+/**
+ * @param {Array<{ text: string }>} entries
+ * @returns {string}
+ */
+function collectTrailingResponse(entries) {
+  /** @type {string[]} */
+  const chunks = [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const text = entries[index].text;
+    if (index !== entries.length - 1 && !isResponseComment(text)) {
+      break;
+    }
+    chunks.unshift(text);
+    if (index !== entries.length - 1 && isPromptComment(text)) {
+      break;
+    }
+    if (index !== entries.length - 1 && !isResponseComment(text)) {
+      break;
+    }
+  }
+  return chunks.join('\n\n').trim();
+}
+
+/**
+ * @param {Array<{ text: string }>} entries
+ * @param {number} from_index
+ * @returns {string}
+ */
+function findPreviousPrompt(entries, from_index) {
+  for (let index = from_index - 1; index >= 0; index -= 1) {
+    const text = entries[index].text;
+    if (isPromptComment(text)) {
+      return text;
+    }
+    if (!isResponseComment(text)) {
+      return text;
+    }
+  }
+  return '';
+}
+
+/**
+ * @param {number|null} comment_ts
+ * @returns {string}
+ */
+function formatCommentSummary(comment_ts) {
+  if (!Number.isFinite(comment_ts)) {
+    return '';
+  }
+  return `Comment ${formatDuration(Date.now() - /** @type {number} */ (comment_ts))} ago`;
+}
+
+/**
+ * @param {number|null} runtime_ms
+ * @returns {string}
+ */
+function formatRuntimeSummary(runtime_ms) {
+  if (!Number.isFinite(runtime_ms)) {
+    return '';
+  }
+  return `Alive ${formatDuration(/** @type {number} */ (runtime_ms))}`;
+}
+
+/**
+ * @param {string} text
+ * @returns {string}
+ */
+function previewSignature(text) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  return normalized.slice(-240);
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {import('lit-html').TemplateResult | string}
+ */
+function renderWorkerChip(issue) {
+  const worker = deriveWorkerIdentity(issue);
+  if (!worker) {
+    return '';
+  }
+  return html`<span class="badge board-card__worker">${worker}</span>`;
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {import('lit-html').TemplateResult | string}
+ */
+function renderModelProviderBadge(issue) {
+  const provider = deriveModelProvider(issue);
+  if (!provider) {
+    return '';
+  }
+  const label = providerLabel(provider);
+  return html`<span
+    class=${`badge board-card__provider board-card__provider--${provider}`}
+    title=${label}
+    aria-label=${label}
+  >
+    ${providerIcon(provider)}
+  </span>`;
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {import('lit-html').TemplateResult | string}
+ */
+function renderModelChip(issue) {
+  const model = deriveModelName(issue);
+  if (!model) {
+    return '';
+  }
+  return html`<span class="badge board-card__model" title=${model}>${model}</span>`;
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {string}
+ */
+function deriveWorkerIdentity(issue) {
+  const labels = Array.isArray(issue.labels) ? issue.labels : [];
+  const pid_label = readLabelValue(labels, ['pid:', 'process:', 'worker-pid:']);
+  const worker_label = readLabelValue(labels, [
+    'worker:',
+    'agent:',
+    'runner:',
+    'background-worker:'
+  ]);
+  const worker = worker_label || issue.assignee || '';
+  if (worker && pid_label) {
+    return `${worker} · PID ${pid_label}`;
+  }
+  if (pid_label) {
+    return `PID ${pid_label}`;
+  }
+  return worker;
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {'openai'|'claude'|'gemini'|''}
+ */
+function deriveModelProvider(issue) {
+  const labels = Array.isArray(issue.labels) ? issue.labels : [];
+  const explicit = readLabelValue(labels, [MODEL_PROVIDER_LABEL_PREFIX]);
+  const normalized = String(explicit || '').trim().toLowerCase();
+  if (
+    normalized === 'openai' ||
+    normalized === 'codex' ||
+    normalized === 'gpt'
+  ) {
+    return 'openai';
+  }
+  if (normalized === 'claude' || normalized === 'anthropic') {
+    return 'claude';
+  }
+  if (normalized === 'gemini' || normalized === 'google') {
+    return 'gemini';
+  }
+  const model = deriveModelName(issue).toLowerCase();
+  if (model.includes('gpt') || model.includes('o1') || model.includes('o3') || model.includes('o4')) {
+    return 'openai';
+  }
+  if (model.includes('claude')) {
+    return 'claude';
+  }
+  if (model.includes('gemini')) {
+    return 'gemini';
+  }
+  return '';
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {string}
+ */
+function deriveModelName(issue) {
+  const labels = Array.isArray(issue.labels) ? issue.labels : [];
+  return readLabelValue(labels, [MODEL_LABEL_PREFIX]);
+}
+
+/**
+ * @param {'openai'|'claude'|'gemini'} provider
+ * @returns {string}
+ */
+function providerLabel(provider) {
+  if (provider === 'openai') return 'OpenAI';
+  if (provider === 'claude') return 'Claude';
+  return 'Gemini';
+}
+
+/**
+ * @param {'openai'|'claude'|'gemini'} provider
+ * @returns {import('lit-html').TemplateResult}
+ */
+function providerIcon(provider) {
+  if (provider === 'openai') {
+    return html`<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3.5 17.8 6.8v6.4L12 16.5l-5.8-3.3V6.8L12 3.5Zm0 4.2-2.1 1.2v2.3l2.1 1.2 2.1-1.2V8.9L12 7.7Z"></path>
+    </svg>`;
+  }
+  if (provider === 'claude') {
+    return html`<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 12c0-4.4 2.8-7 7.3-7 2.3 0 4.2.6 5.7 1.8l-2 2.3c-1-.8-2.1-1.2-3.5-1.2-2.6 0-4.3 1.5-4.3 4.1s1.7 4.1 4.3 4.1c1.4 0 2.5-.4 3.5-1.2l2 2.3C16.5 18.4 14.6 19 12.3 19 7.8 19 5 16.4 5 12Z"></path>
+    </svg>`;
+  }
+  return html`<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M12 4.5 14.6 9 20 10.2l-3.7 3.6.6 5.2L12 16.8 7.1 19l.6-5.2L4 10.2 9.4 9 12 4.5Z"></path>
+  </svg>`;
+}
+
+/**
+ * @param {string[]} labels
+ * @param {string[]} prefixes
+ * @returns {string}
+ */
+function readLabelValue(labels, prefixes) {
+  const found = labels.find((label) =>
+    prefixes.some((prefix) => String(label).startsWith(prefix))
+  );
+  if (!found) {
+    return '';
+  }
+  const prefix = prefixes.find((candidate) => found.startsWith(candidate));
+  return prefix ? found.slice(prefix.length).trim() : '';
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {CardHealth}
+ */
+function deriveCardHealth(issue) {
+  if (issue.status === 'closed') {
+    return {
+      level: 'idle',
+      indicator: 'none',
+      runtime_ms: null,
+      heartbeat_ts: null,
+      heartbeat_age_ms: null,
+      is_missed: false,
+      summary: ''
+    };
+  }
+  const runtime_ms = parseRuntimeLabel(issue.labels);
+  const heartbeat_ts = parseHeartbeatLabel(issue.labels);
+  const heartbeat_age_ms =
+    Number.isFinite(heartbeat_ts) && heartbeat_ts !== null
+      ? Date.now() - heartbeat_ts
+      : null;
+  const expected_ms =
+    runtime_ms !== null && runtime_ms >= 60 * 60 * 1000
+      ? HEARTBEAT_EXPECTED_LONG_RUNNING_MS
+      : HEARTBEAT_EXPECTED_DEFAULT_MS;
+  const is_missed =
+    heartbeat_age_ms !== null && Number.isFinite(heartbeat_age_ms)
+      ? heartbeat_age_ms > expected_ms
+      : false;
+  const severity_basis = runtime_ms ?? heartbeat_age_ms ?? null;
+  /** @type {CardHealth['level']} */
+  let level = 'idle';
+  if (severity_basis !== null && severity_basis >= 2 * 60 * 60 * 1000) {
+    level = 'hours';
+  } else if (severity_basis !== null && severity_basis >= 60 * 60 * 1000) {
+    level = 'hour';
+  } else if (severity_basis !== null && severity_basis >= 60 * 1000) {
+    level = 'minutes';
+  } else if (severity_basis !== null && severity_basis >= 0) {
+    level = 'seconds';
+  }
+  /** @type {CardHealth['indicator']} */
+  let indicator = 'none';
+  if (issue.status === 'in_progress' && heartbeat_ts !== null) {
+    indicator = is_missed ? 'missed' : 'healthy';
+  } else if (issue.status === 'in_progress' && runtime_ms !== null) {
+    indicator = 'healthy';
+  }
+  return {
+    level,
+    indicator,
+    runtime_ms,
+    heartbeat_ts,
+    heartbeat_age_ms,
+    is_missed,
+    summary: formatHealthSummary(runtime_ms, heartbeat_age_ms)
+  };
+}
+
+/**
+ * @param {IssueLite} issue
+ * @param {CardHealth} health
+ * @returns {{ base_runtime_ms: number|null, runtime_ref_ts: number|null, runtime_ms: number|null, health: CardHealth }}
+ */
+function deriveDynamicDisplayState(issue, health) {
+  const runtime_ref_ts = deriveRuntimeReferenceTimestamp(issue, health);
+  const runtime_ms =
+    Number.isFinite(health.runtime_ms) && Number.isFinite(runtime_ref_ts)
+      ? Math.max(
+          0,
+          /** @type {number} */ (health.runtime_ms) +
+            (Date.now() - /** @type {number} */ (runtime_ref_ts))
+        )
+      : health.runtime_ms;
+  const heartbeat_age_ms =
+    Number.isFinite(health.heartbeat_ts) && health.heartbeat_ts !== null
+      ? Date.now() - health.heartbeat_ts
+      : null;
+  return {
+    base_runtime_ms: health.runtime_ms,
+    runtime_ref_ts,
+    runtime_ms,
+    health: deriveHealthFromDisplayState(
+      issue.status || '',
+      runtime_ms,
+      health.heartbeat_ts,
+      heartbeat_age_ms
+    )
+  };
+}
+
+/**
+ * @param {string} status
+ * @param {number|null} runtime_ms
+ * @param {number|null} heartbeat_ts
+ * @param {number|null} heartbeat_age_ms
+ * @returns {CardHealth}
+ */
+function deriveHealthFromDisplayState(status, runtime_ms, heartbeat_ts, heartbeat_age_ms) {
+  if (status === 'closed') {
+    return {
+      level: 'idle',
+      indicator: 'none',
+      runtime_ms: null,
+      heartbeat_ts: null,
+      heartbeat_age_ms: null,
+      is_missed: false,
+      summary: ''
+    };
+  }
+  const expected_ms =
+    runtime_ms !== null && runtime_ms >= 60 * 60 * 1000
+      ? HEARTBEAT_EXPECTED_LONG_RUNNING_MS
+      : HEARTBEAT_EXPECTED_DEFAULT_MS;
+  const is_missed =
+    heartbeat_age_ms !== null && Number.isFinite(heartbeat_age_ms)
+      ? heartbeat_age_ms > expected_ms
+      : false;
+  const severity_basis = runtime_ms ?? heartbeat_age_ms ?? null;
+  /** @type {CardHealth['level']} */
+  let level = 'idle';
+  if (severity_basis !== null && severity_basis >= 2 * 60 * 60 * 1000) {
+    level = 'hours';
+  } else if (severity_basis !== null && severity_basis >= 60 * 60 * 1000) {
+    level = 'hour';
+  } else if (severity_basis !== null && severity_basis >= 60 * 1000) {
+    level = 'minutes';
+  } else if (severity_basis !== null && severity_basis >= 0) {
+    level = 'seconds';
+  }
+  /** @type {CardHealth['indicator']} */
+  let indicator = 'none';
+  if (status === 'in_progress' && heartbeat_ts !== null) {
+    indicator = is_missed ? 'missed' : 'healthy';
+  } else if (status === 'in_progress' && runtime_ms !== null) {
+    indicator = 'healthy';
+  }
+  return {
+    level,
+    indicator,
+    runtime_ms,
+    heartbeat_ts,
+    heartbeat_age_ms,
+    is_missed,
+    summary: formatHealthSummary(runtime_ms, heartbeat_age_ms)
+  };
+}
+
+/**
+ * @param {IssueLite} issue
+ * @param {CardHealth} health
+ * @returns {number|null}
+ */
+function deriveRuntimeReferenceTimestamp(issue, health) {
+  if (health.runtime_ms === null) {
+    return null;
+  }
+  const candidates = [health.heartbeat_ts, issue.updated_at, issue.created_at];
+  for (const value of candidates) {
+    if (Number.isFinite(value)) {
+      return /** @type {number} */ (value);
+    }
+  }
+  return Date.now();
+}
+
+/**
+ * @param {HTMLElement} card
+ * @param {CardHealth} health
+ */
+function syncCardHealthClasses(card, health) {
+  for (const class_name of HEALTH_LEVEL_CLASSES) {
+    card.classList.remove(class_name);
+  }
+  if (health.level !== 'idle') {
+    card.classList.add(`board-card--${health.level}`);
+  }
+  if (health.is_missed) {
+    card.classList.add('board-card--stale');
+  } else {
+    card.classList.remove('board-card--stale');
+  }
+}
+
+/**
+ * @param {CardHealth} health
+ * @returns {string}
+ */
+function cardClassName(health) {
+  const classes = ['board-card'];
+  const active = health.level === 'idle' ? '' : `board-card--${health.level}`;
+  if (active) {
+    classes.push(active);
+  }
+  if (health.is_missed) {
+    classes.push('board-card--stale');
+  }
+  return classes.join(' ');
+}
+
+/**
+ * @param {string[]|undefined} labels
+ * @returns {number|null}
+ */
+function parseHeartbeatLabel(labels) {
+  const raw = Array.isArray(labels)
+    ? labels.find((label) => String(label).startsWith(HEARTBEAT_LABEL_PREFIX))
+    : undefined;
+  if (!raw) {
+    return null;
+  }
+  const parsed = Date.parse(raw.slice(HEARTBEAT_LABEL_PREFIX.length).trim());
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * @param {string[]|undefined} labels
+ * @returns {number|null}
+ */
+function parseRuntimeLabel(labels) {
+  const raw = Array.isArray(labels)
+    ? labels.find((label) => String(label).startsWith(RUNTIME_LABEL_PREFIX))
+    : undefined;
+  if (!raw) {
+    return null;
+  }
+  const value = raw.slice(RUNTIME_LABEL_PREFIX.length).trim().toLowerCase();
+  const regex = /(\d+)\s*([dhms])/g;
+  let total = 0;
+  let matched = false;
+  /** @type {RegExpExecArray|null} */
+  let match;
+  while ((match = regex.exec(value))) {
+    matched = true;
+    const amount = Number(match[1]);
+    const unit = match[2];
+    if (unit === 'd') {
+      total += amount * 24 * 60 * 60 * 1000;
+    } else if (unit === 'h') {
+      total += amount * 60 * 60 * 1000;
+    } else if (unit === 'm') {
+      total += amount * 60 * 1000;
+    } else if (unit === 's') {
+      total += amount * 1000;
+    }
+  }
+  return matched ? total : null;
+}
+
+/**
+ * @param {number|null} runtime_ms
+ * @param {number|null} heartbeat_age_ms
+ * @returns {string}
+ */
+function formatHealthSummary(runtime_ms, heartbeat_age_ms) {
+  if (heartbeat_age_ms !== null) {
+    return `${formatDuration(heartbeat_age_ms)} since heartbeat`;
+  }
+  if (runtime_ms !== null) {
+    return `${formatDuration(runtime_ms)} alive`;
+  }
+  return '';
+}
+
+/**
+ * @param {number} duration_ms
+ * @returns {string}
+ */
+function formatDuration(duration_ms) {
+  const safe = Math.max(0, Math.floor(duration_ms));
+  const total_seconds = Math.floor(safe / 1000);
+  if (total_seconds < 60) {
+    return `${total_seconds}s`;
+  }
+  const total_minutes = Math.floor(total_seconds / 60);
+  if (total_minutes < 60) {
+    return `${total_minutes}m`;
+  }
+  const hours = Math.floor(total_minutes / 60);
+  const minutes = total_minutes % 60;
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+/**
+ * @param {string|null} value
+ * @returns {number|null}
+ */
+function parseNumberAttribute(value) {
+  if (!value || value.length === 0) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * @param {HTMLElement} element
+ * @param {string} class_name
+ */
+function restartAnimation(element, class_name) {
+  element.classList.remove(class_name);
+  void element.offsetWidth;
+  element.classList.add(class_name);
+  window.setTimeout(() => {
+    element.classList.remove(class_name);
+  }, 1200);
+}
+
+/**
+ * @returns {Map<string, DOMRect>}
+ */
+function captureCardPositions() {
+  /** @type {Map<string, DOMRect>} */
+  const positions = new Map();
+  /** @type {HTMLElement[]} */
+  const cards = Array.from(document.querySelectorAll('.board-card[data-issue-id]'));
+  for (const card of cards) {
+    const issue_id = String(card.getAttribute('data-issue-id') || '');
+    if (!issue_id) {
+      continue;
+    }
+    positions.set(issue_id, card.getBoundingClientRect());
+  }
+  return positions;
+}
+
+
+/**
+ * @returns {boolean}
+ */
+function isBoardDebugEnabled() {
+  try {
+    const hash = String(window.location.hash || '');
+    const frag = hash.startsWith('#') ? hash.slice(1) : hash;
+    const q_index = frag.indexOf('?');
+    const query = q_index >= 0 ? frag.slice(q_index + 1) : '';
+    const params = new URLSearchParams(query);
+    const flag = String(
+      params.get('debug') ||
+        params.get('board_debug') ||
+        window.localStorage.getItem('beads-ui.board-debug') ||
+        ''
+    ).toLowerCase();
+    return flag === '1' || flag === 'true' || flag === 'on';
+  } catch {
+    return false;
+  }
 }

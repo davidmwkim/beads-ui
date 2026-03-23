@@ -1184,7 +1184,7 @@ export function createDetailView(
                     >${formatCommentDate(c.created_at)}</span
                   >
                 </div>
-                <div class="comment-text">${c.text}</div>
+                <div class="comment-text md">${renderMarkdown(c.text || '')}</div>
               </div>
             `
           )}

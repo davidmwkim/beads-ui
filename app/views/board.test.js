@@ -373,4 +373,229 @@ describe('views/board', () => {
     ).map((el) => el.textContent?.trim());
     expect(prog_ids).toEqual(['X-2']);
   });
+
+  test('renders heartbeat health, runtime chip, and last-comment metadata', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const now = Date.now();
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:in-progress').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:in-progress',
+      revision: 1,
+      issues: [
+        {
+          id: 'P-7',
+          title: 'healthy heartbeat',
+          status: 'in_progress',
+          issue_type: 'task',
+          priority: 1,
+          created_at: now - 20_000,
+          updated_at: now,
+          assignee: 'worker-a',
+          last_comment_at: new Date(now - 2 * 60_000).toISOString(),
+          labels: [
+            'pid:4242',
+            'model-provider:claude',
+            'model:claude-sonnet-4.5',
+            'last-heartbeat:' + new Date(now - 45_000).toISOString(),
+            'time-alive:12m'
+          ]
+        },
+        {
+          id: 'P-8',
+          title: 'missed heartbeat',
+          status: 'in_progress',
+          issue_type: 'task',
+          priority: 1,
+          created_at: now - 20_000,
+          updated_at: now,
+          labels: [
+            'last-heartbeat:' + new Date(now - 16 * 60_000).toISOString(),
+            'time-alive:2h5m'
+          ]
+        }
+      ]
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const healthy = /** @type {HTMLElement|null} */ (
+      mount.querySelector('.board-card[data-issue-id="P-7"]')
+    );
+    const missed = /** @type {HTMLElement|null} */ (
+      mount.querySelector('.board-card[data-issue-id="P-8"]')
+    );
+
+    expect(healthy?.classList.contains('board-card--minutes')).toBe(true);
+    expect(missed?.classList.contains('board-card--hours')).toBe(true);
+    expect(missed?.classList.contains('board-card--stale')).toBe(true);
+    expect(
+      healthy?.querySelector('.board-card__indicator--healthy')
+    ).not.toBeNull();
+    expect(
+      missed?.querySelector('.board-card__indicator--missed')?.textContent?.trim()
+    ).toBe('!');
+    expect(
+      healthy?.querySelector('.board-card__comment-count')?.textContent?.trim()
+    ).toContain('Comment 2m ago');
+    expect(
+      healthy?.querySelector('.board-card__worker')?.textContent?.trim()
+    ).toBe('worker-a · PID 4242');
+    expect(
+      healthy?.querySelector('.board-card__provider')?.getAttribute('aria-label')
+    ).toBe('Claude');
+    expect(
+      healthy?.querySelector('.board-card__model')?.textContent?.trim()
+    ).toBe('claude-sonnet-4.5');
+    expect(
+      healthy?.querySelector('.board-card__runtime')?.textContent?.trim()
+    ).toBe('Alive 12m');
+    expect(
+      healthy?.querySelector('.board-card__health')?.textContent?.includes(
+        'since heartbeat'
+      )
+    ).toBe(true);
+  });
+
+  test('does not tint or badge closed issues even when heartbeat labels exist', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const now = Date.now();
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:closed').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:closed',
+      revision: 1,
+      issues: [
+        {
+          id: 'C-9',
+          title: 'closed with old heartbeat',
+          status: 'closed',
+          issue_type: 'task',
+          priority: 1,
+          created_at: now - 100_000,
+          updated_at: now,
+          closed_at: now,
+          labels: [
+            'last-heartbeat:' + new Date(now - 3 * 60 * 60 * 1000).toISOString(),
+            'time-alive:4h'
+          ]
+        }
+      ]
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const closed = /** @type {HTMLElement|null} */ (
+      mount.querySelector('.board-card[data-issue-id="C-9"]')
+    );
+
+    expect(closed?.classList.contains('board-card--minutes')).toBe(false);
+    expect(closed?.classList.contains('board-card--hour')).toBe(false);
+    expect(closed?.classList.contains('board-card--hours')).toBe(false);
+    expect(closed?.classList.contains('board-card--stale')).toBe(false);
+    expect(closed?.querySelector('.board-card__health')).toBeNull();
+    expect(closed?.querySelector('.board-card__indicator')).toBeNull();
+  });
+
+  test('renders debug simulation cards across columns when board debug flag is enabled in hash', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    window.location.hash = '#/board?debug=1';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const issueStores = createTestIssueStores();
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    expect(mount.querySelector('.board-debug')).toBeNull();
+    expect(mount.querySelectorAll('.board-card').length).toBeGreaterThanOrEqual(5);
+    expect(
+      mount.querySelector('#blocked-col .board-card[data-issue-id="DBG-B1"]')
+    ).not.toBeNull();
+    expect(
+      mount.querySelector('#ready-col .board-card[data-issue-id="DBG-R1"]')
+    ).not.toBeNull();
+    expect(
+      mount.querySelector('#in-progress-col .board-card[data-issue-id="DBG-P1"]')
+    ).not.toBeNull();
+    expect(
+      mount.querySelector('#closed-col .board-card[data-issue-id="DBG-C1"]')
+    ).not.toBeNull();
+    expect(
+      mount.querySelector('#in-progress-col .board-card[data-issue-id="DBG-P3"]')
+    ).not.toBeNull();
+    expect(
+      mount.querySelector('#in-progress-col .board-card[data-issue-id="DBG-P4"]')
+    ).not.toBeNull();
+    expect(
+      mount.querySelector('.board-card[data-issue-id="DBG-P1"] .board-card__indicator--healthy')
+    ).not.toBeNull();
+    expect(
+      mount.querySelector('.board-card[data-issue-id="DBG-P4"] .board-card__indicator--missed')
+    ).not.toBeNull();
+    expect(
+      mount.querySelectorAll(
+        '.board-card[data-issue-id="DBG-P1"] .board-card__debug-message'
+      ).length
+    ).toBe(2);
+    expect(
+      mount.querySelector(
+        '.board-card[data-issue-id="DBG-P1"] .board-card__preview-label'
+      )?.textContent
+    ).toContain('Latest Prompt');
+    expect(
+      mount.querySelector(
+        '.board-card[data-issue-id="DBG-P1"] .board-card__debug-message pre code'
+      )?.textContent
+    ).toContain('status=ok');
+    expect(
+      mount.querySelector('.board-card[data-issue-id="DBG-P1"]')?.classList.contains(
+        'board-card--seconds'
+      )
+    ).toBe(true);
+    expect(
+      mount.querySelector('.board-card[data-issue-id="DBG-P2"]')?.classList.contains(
+        'board-card--minutes'
+      )
+    ).toBe(true);
+    expect(
+      mount.querySelector('.board-card[data-issue-id="DBG-P3"]')?.classList.contains(
+        'board-card--hours'
+      )
+    ).toBe(true);
+    expect(
+      mount.querySelector('.board-card[data-issue-id="DBG-P4"]')?.classList.contains(
+        'board-card--stale'
+      )
+    ).toBe(true);
+  });
 });
