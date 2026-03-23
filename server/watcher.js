@@ -9,7 +9,8 @@ const IGNORED_DOLT_RUNTIME_FILES = new Set([
   'dolt-server.port',
   'dolt-server.lock',
   'dolt-config.log',
-  'last-touched'
+  'last-touched',
+  'interactions.jsonl'
 ]);
 
 /**

@@ -494,6 +494,9 @@ export function createBoardView(
     const dynamic_state = deriveDynamicDisplayState(it, health);
     const runtime_label = formatRuntimeSummary(dynamic_state.runtime_ms);
     const preview = deriveCardPreview(it);
+    if (it.status === 'closed') {
+      console.log('[board debug] closed card', it.id, 'metadata:', it.metadata, 'preview:', preview);
+    }
     return html`
       <article
         class=${cardClassName(dynamic_state.health)}
