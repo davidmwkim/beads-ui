@@ -1505,6 +1505,9 @@ input.inline-edit:focus {
 .board-card--updated {
   animation: board-card-pulse 920ms ease-out;
 }
+.board-card--column-enter {
+  animation: board-card-column-enter 1100ms cubic-bezier(0.2, 0.78, 0.18, 1);
+}
 .board-card__indicator--heartbeat-pulse {
   animation:
     board-indicator-pulse 1200ms ease-out,
@@ -1675,6 +1678,40 @@ input.inline-edit:focus {
   }
 }
 
+@keyframes board-card-column-enter {
+  0% {
+    transform: scale(1);
+    background: color-mix(in srgb, var(--panel-bg) 92%, transparent);
+    box-shadow:
+      0 1px 2px color-mix(in srgb, #000 10%, transparent),
+      0 2px 6px color-mix(in srgb, #000 8%, transparent);
+  }
+  20% {
+    transform: scale(1.01);
+    background: color-mix(
+      in srgb,
+      var(--board-card-accent, #f59e0b) 18%,
+      var(--panel-bg)
+    );
+    box-shadow:
+      0 0 0 8px
+        color-mix(
+          in srgb,
+          var(--board-card-accent, #f59e0b) 14%,
+          transparent
+        ),
+      0 12px 28px
+        color-mix(
+          in srgb,
+          var(--board-card-accent, #f59e0b) 16%,
+          transparent
+        );
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 @keyframes board-preview-flash {
   0% {
     transform: scale(1);
@@ -1714,6 +1751,7 @@ input.inline-edit:focus {
   .board-card,
   .board-card--entering,
   .board-card--updated,
+  .board-card--column-enter,
   .board-card__indicator--healthy::before,
   .board-card__indicator--heartbeat-pulse,
   .board-card__comment-count--updated,
@@ -2039,6 +2077,27 @@ html[data-theme='dark'] {
     align-items: center;
     gap: 8px;
   }
+}
+.metadata-row {
+  align-items: start;
+}
+.metadata-row .value {
+  display: block;
+  min-width: 0;
+}
+.metadata-row .value > span,
+.metadata-pre {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.metadata-pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel-bg) 86%, var(--border));
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 /* --- Issue Details Dialog (UI-104) --- */

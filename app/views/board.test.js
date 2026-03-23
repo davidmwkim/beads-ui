@@ -468,6 +468,135 @@ describe('views/board', () => {
     ).toBe(true);
   });
 
+  test('prefers metadata over labels for runtime heartbeat conversation and model data', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const now = Date.now();
+    const heartbeat_iso = new Date(now - 30_000).toISOString();
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:in-progress').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:in-progress',
+      revision: 1,
+      issues: [
+        {
+          id: 'P-9',
+          title: 'metadata-backed issue',
+          status: 'in_progress',
+          issue_type: 'task',
+          priority: 1,
+          created_at: now - 20_000,
+          updated_at: now,
+          assignee: 'fallback-worker',
+          metadata: {
+            agent_name: 'codex',
+            background_pid: 4242,
+            conversation_id: 'conv-123',
+            last_heartbeat: heartbeat_iso,
+            model: 'gpt-5.4',
+            model_provider: 'codex',
+            time_alive: '3m'
+          },
+          labels: [
+            'pid:9999',
+            'model-provider:claude',
+            'model:claude-sonnet-4.5',
+            'last-heartbeat:' + new Date(now - 16 * 60_000).toISOString(),
+            'time-alive:2h5m'
+          ]
+        }
+      ]
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const card = /** @type {HTMLElement|null} */ (
+      mount.querySelector('.board-card[data-issue-id="P-9"]')
+    );
+
+    expect(card?.classList.contains('board-card--minutes')).toBe(true);
+    expect(card?.classList.contains('board-card--hours')).toBe(false);
+    expect(
+      card?.querySelector('.board-card__worker')?.textContent?.trim()
+    ).toBe('codex · PID 4242');
+    expect(
+      card?.querySelector('.board-card__provider')?.getAttribute('aria-label')
+    ).toBe('OpenAI');
+    expect(
+      card?.querySelector('.board-card__model')?.textContent?.trim()
+    ).toBe('gpt-5.4');
+    expect(
+      card?.querySelector('.board-card__conversation')?.textContent?.trim()
+    ).toContain('conv-123');
+    expect(
+      card?.querySelector('.board-card__runtime')?.textContent?.trim()
+    ).toBe('Alive 3m');
+  });
+
+  test('prefers metadata prompt and response preview over comment-derived fields', async () => {
+    document.body.innerHTML = '<div id="m"></div>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('m'));
+
+    const now = Date.now();
+    const issueStores = createTestIssueStores();
+    issueStores.getStore('tab:board:closed').applyPush({
+      type: 'snapshot',
+      id: 'tab:board:closed',
+      revision: 1,
+      issues: [
+        {
+          id: 'P-10',
+          title: 'metadata preview',
+          status: 'closed',
+          issue_type: 'task',
+          priority: 1,
+          created_at: now - 20_000,
+          updated_at: now,
+          closed_at: now,
+          latest_prompt: 'comment prompt',
+          latest_response: 'comment response',
+          metadata: {
+            latest_prompt: 'metadata prompt',
+            latest_response: 'metadata response'
+          }
+        }
+      ]
+    });
+
+    const view = createBoardView(
+      mount,
+      null,
+      () => {},
+      undefined,
+      undefined,
+      issueStores
+    );
+
+    await view.load();
+
+    const card = /** @type {HTMLElement|null} */ (
+      mount.querySelector('.board-card[data-issue-id="P-10"]')
+    );
+    const panels = Array.from(
+      card?.querySelectorAll('.board-card__debug-message') || []
+    ).map((el) => el.textContent?.trim() || '');
+
+    expect(panels.join('\n')).toContain('metadata prompt');
+    expect(panels.join('\n')).toContain('metadata response');
+    expect(panels.join('\n')).not.toContain('comment prompt');
+    expect(panels.join('\n')).not.toContain('comment response');
+  });
+
   test('does not tint or badge closed issues even when heartbeat labels exist', async () => {
     document.body.innerHTML = '<div id="m"></div>';
     const mount = /** @type {HTMLElement} */ (document.getElementById('m'));

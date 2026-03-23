@@ -104,6 +104,41 @@ describe('views/detail', () => {
     expect(badge && badge.textContent).toBe('Feature');
   });
 
+  test('renders metadata in the sidebar', async () => {
+    document.body.innerHTML =
+      '<section class="panel"><div id="mount"></div></section>';
+    const mount = /** @type {HTMLElement} */ (document.getElementById('mount'));
+    const issue = {
+      id: 'UI-77',
+      title: 'With metadata',
+      issue_type: 'task',
+      metadata: {
+        conversation_id: 'conv-123',
+        background_pid: 4242,
+        model: 'gpt-5.4',
+        latest_prompt: 'Ship the metadata card.'
+      },
+      dependencies: [],
+      dependents: []
+    };
+    const stores = {
+      /** @param {string} id */
+      snapshotFor(id) {
+        return id === 'detail:UI-77' ? [issue] : [];
+      },
+      subscribe() {
+        return () => {};
+      }
+    };
+    const view = createDetailView(mount, async () => ({}), undefined, stores);
+    await view.load('UI-77');
+    expect((mount.textContent || '')).toContain('Metadata');
+    expect((mount.textContent || '')).toContain('conversation_id');
+    expect((mount.textContent || '')).toContain('conv-123');
+    expect((mount.textContent || '')).toContain('background_pid');
+    expect((mount.textContent || '')).toContain('4242');
+  });
+
   test('inline editing toggles for title and description', async () => {
     document.body.innerHTML =
       '<section class="panel"><div id="mount"></div></section>';

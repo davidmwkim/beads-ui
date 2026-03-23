@@ -3,6 +3,15 @@ import path from 'node:path';
 import { resolveWorkspaceDatabase } from './db.js';
 import { debug } from './logging.js';
 
+const IGNORED_DOLT_RUNTIME_FILES = new Set([
+  'dolt-server.log',
+  'dolt-server.pid',
+  'dolt-server.port',
+  'dolt-server.lock',
+  'dolt-config.log',
+  'last-touched'
+]);
+
 /**
  * Watch the resolved workspace database target and invoke a callback after a
  * debounce window.
@@ -73,7 +82,11 @@ export function watchDb(root_dir, onChange, options = {}) {
         current_dir,
         { persistent: true },
         (event_type, filename) => {
+          const safe_name = filename ? String(filename) : '';
           if (current_file && filename && String(filename) !== current_file) {
+            return;
+          }
+          if (!current_file && shouldIgnoreDirectoryEvent(safe_name)) {
             return;
           }
           if (event_type === 'change' || event_type === 'rename') {
@@ -136,4 +149,20 @@ function pathIsDirectory(file_path) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Ignore Dolt runtime churn that should not trigger UI refreshes.
+ *
+ * @param {string} filename
+ * @returns {boolean}
+ */
+function shouldIgnoreDirectoryEvent(filename) {
+  if (!filename) {
+    return false;
+  }
+  if (IGNORED_DOLT_RUNTIME_FILES.has(filename)) {
+    return true;
+  }
+  return filename === 'sql-server.info';
 }

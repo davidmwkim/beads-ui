@@ -33,6 +33,27 @@ function formatCommentDate(dateStr) {
 }
 
 /**
+ * @param {unknown} value
+ * @returns {string}
+ */
+function formatMetadataValue(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
  * @typedef {Object} Dependency
  * @property {string} id
  * @property {string} [title]
@@ -1098,7 +1119,12 @@ export function createDetailView(
     const conversation_id =
       typeof metadata.conversation_id === 'string'
         ? metadata.conversation_id
-        : '';
+        : typeof metadata['conversation.id'] === 'string'
+          ? metadata['conversation.id']
+          : '';
+    const metadata_entries = Object.entries(metadata).filter(
+      ([, value]) => value !== null && value !== undefined && value !== ''
+    );
 
     const labels = Array.isArray(issue.labels) ? issue.labels : [];
     const labels_block = html`<div class="props-card labels">
@@ -1216,6 +1242,35 @@ export function createDetailView(
       </div>
     </div>`;
 
+    const metadata_block =
+      metadata_entries.length > 0
+        ? html`<div class="props-card metadata-card">
+            <div class="props-card__title">Metadata</div>
+            <div class="metadata-list">
+              ${metadata_entries.map(([key, value]) => {
+                const text = formatMetadataValue(value);
+                const is_multiline = text.includes('\n');
+                const is_mono =
+                  key.includes('id') ||
+                  key.includes('path') ||
+                  key.includes('pid') ||
+                  key.includes('model') ||
+                  key.includes('conversation') ||
+                  is_multiline;
+                return html`<div class="prop metadata-row">
+                  <div class="label">${key}</div>
+                  <div class="value">
+                    ${is_multiline
+                      ? html`<pre class=${is_mono ? 'mono metadata-pre' : 'metadata-pre'}>
+${text}</pre>`
+                      : html`<span class=${is_mono ? 'mono' : ''}>${text}</span>`}
+                  </div>
+                </div>`;
+              })}
+            </div>
+          </div>`
+        : '';
+
     return html`
       <div class="panel__body" id="detail-root">
         <div class="detail-layout">
@@ -1326,6 +1381,7 @@ export function createDetailView(
                   : ''}
               </div>
               ${labels_block}
+              ${metadata_block}
               ${depsSection('Dependencies', issue.dependencies || [])}
               ${depsSection('Dependents', issue.dependents || [])}
             </div>

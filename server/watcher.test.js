@@ -16,7 +16,10 @@ vi.mock('node:fs', () => {
     watchers.push({ dir, cb, w });
     return /** @type {any} */ (w);
   });
-  return { default: { watch }, watch };
+  const statSync = vi.fn((file_path) => ({
+    isDirectory: () => String(file_path).endsWith('/.beads')
+  }));
+  return { default: { watch, statSync }, watch, statSync };
 });
 
 beforeEach(() => {
@@ -114,6 +117,27 @@ describe('watchDb', () => {
     cb('change', 'ui.db');
     vi.advanceTimersByTime(10);
     expect(calls.length).toBe(2);
+
+    handle.close();
+  });
+
+  test('ignores dolt runtime log churn for directory-backed workspaces', () => {
+    const calls = [];
+    const handle = watchDb('/repo', () => calls.push(null), {
+      debounce_ms: 10,
+      explicit_db: '/repo/.beads'
+    });
+    const { cb } = watchers[0];
+
+    cb('change', 'dolt-server.log');
+    cb('change', 'dolt-server.port');
+    cb('change', 'sql-server.info');
+    vi.advanceTimersByTime(20);
+    expect(calls.length).toBe(0);
+
+    cb('change', 'events.jsonl');
+    vi.advanceTimersByTime(20);
+    expect(calls.length).toBe(1);
 
     handle.close();
   });

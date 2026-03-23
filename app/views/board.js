@@ -138,7 +138,24 @@ const DEBUG_SIMULATION_INITIAL = [
       'latency_ms=42',
       'heartbeat=steady',
       '```'
-    ].join('\n')
+    ].join('\n'),
+    metadata: {
+      latest_prompt: [
+        'Kick off the worker and confirm the first heartbeat lands.',
+        '',
+        '- post a heartbeat every 3s',
+        '- keep retries below `3`'
+      ].join('\n'),
+      latest_response: [
+        'Worker is online.',
+        '',
+        '```text',
+        'status=ok',
+        'latency_ms=42',
+        'heartbeat=steady',
+        '```'
+      ].join('\n')
+    }
   },
   {
     id: 'DBG-P2',
@@ -176,7 +193,23 @@ const DEBUG_SIMULATION_INITIAL = [
       'status=ok',
       'processed=14',
       '```'
-    ].join('\n')
+    ].join('\n'),
+    metadata: {
+      latest_prompt: [
+        'Continue processing the active queue.',
+        '',
+        '- keep scan latency under 500ms',
+        '- flush metrics on each loop'
+      ].join('\n'),
+      latest_response: [
+        'Queue is draining normally.',
+        '',
+        '```text',
+        'status=ok',
+        'processed=14',
+        '```'
+      ].join('\n')
+    }
   },
   {
     id: 'DBG-P3',
@@ -214,7 +247,23 @@ const DEBUG_SIMULATION_INITIAL = [
       'status=ok',
       'batches_complete=9',
       '```'
-    ].join('\n')
+    ].join('\n'),
+    metadata: {
+      latest_prompt: [
+        'Keep the long-running reconciliation task healthy.',
+        '',
+        '- checkpoint every 5 minutes',
+        '- report progress at each batch boundary'
+      ].join('\n'),
+      latest_response: [
+        'Batch processing is still healthy.',
+        '',
+        '```text',
+        'status=ok',
+        'batches_complete=9',
+        '```'
+      ].join('\n')
+    }
   },
   {
     id: 'DBG-P4',
@@ -246,7 +295,20 @@ const DEBUG_SIMULATION_INITIAL = [
       '> heartbeat overdue by more than an hour',
       '',
       'Waiting on upstream dependency before next emit.'
-    ].join('\n')
+    ].join('\n'),
+    metadata: {
+      latest_prompt: [
+        'Investigate the stalled worker and decide whether to restart it.',
+        '',
+        '1. confirm last durable checkpoint',
+        '2. inspect upstream dependency health'
+      ].join('\n'),
+      latest_response: [
+        '> heartbeat overdue by more than an hour',
+        '',
+        'Waiting on upstream dependency before next emit.'
+      ].join('\n')
+    }
   },
   {
     id: 'DBG-C1',
@@ -491,8 +553,7 @@ export function createBoardView(
                   : ''}
             </div>`
           : ''}
-        ${it.status === 'in_progress' &&
-        (preview.latest_prompt || preview.latest_response || preview.response_pending)
+        ${(preview.latest_prompt || preview.latest_response || preview.response_pending)
           ? html`<div class="board-card__debug-messages">
               ${preview.latest_prompt
                 ? html`<section
@@ -730,6 +791,7 @@ export function createBoardView(
         );
         const has_comment_delta = Boolean(
           prev &&
+            next.status !== 'closed' &&
             Number.isFinite(next.last_comment_ts) &&
             (!Number.isFinite(prev.last_comment_ts) ||
               /** @type {number} */ (next.last_comment_ts) >
@@ -785,6 +847,8 @@ export function createBoardView(
             if (comment_chip) {
               restartAnimation(comment_chip, 'board-card__comment-count--updated');
             }
+          } else if (has_column_delta) {
+            restartAnimation(card, 'board-card--column-enter');
           } else {
             restartAnimation(card, 'board-card--updated');
           }
@@ -1051,9 +1115,6 @@ export function createBoardView(
         comment_timestamp_cache.set(issue_id, null);
         comment_preview_cache.delete(issue_id);
         issue.last_comment_at = undefined;
-        issue.latest_prompt = undefined;
-        issue.latest_response = undefined;
-        issue.response_pending = undefined;
         continue;
       }
       const cached = comment_timestamp_cache.get(issue_id);
@@ -1063,11 +1124,7 @@ export function createBoardView(
           : undefined;
       }
       const preview = comment_preview_cache.get(issue_id);
-      if (preview) {
-        issue.latest_prompt = preview.latest_prompt;
-        issue.latest_response = preview.latest_response;
-        issue.response_pending = preview.response_pending;
-      }
+      void preview;
       if (
         (comment_timestamp_cache.has(issue_id) &&
           !(Number.isFinite(issue.updated_at) &&
@@ -1090,9 +1147,6 @@ export function createBoardView(
             target.last_comment_at = last_comment_ts
               ? new Date(last_comment_ts).toISOString()
               : undefined;
-            target.latest_prompt = preview.latest_prompt;
-            target.latest_response = preview.latest_response;
-            target.response_pending = preview.response_pending;
           }
           doRender();
         })
@@ -1779,12 +1833,22 @@ function latestCommentPreview(comments) {
  * @returns {{ latest_prompt?: string, latest_response?: string, response_pending?: boolean }}
  */
 function deriveCardPreview(issue) {
-  const response_from_notes = clipNotesResponsePreview(issue.notes);
+  const metadata_prompt = readMetadataValue(issue, [
+    'latest_prompt',
+    'latest.prompt'
+  ]);
+  const metadata_response = readMetadataValue(issue, [
+    'latest_response',
+    'latest.response'
+  ]);
+  const metadata_pending =
+    Boolean(metadata_prompt) &&
+    !metadata_response &&
+    issue.status === 'in_progress';
   return {
-    latest_prompt: clipPromptPreview(issue.latest_prompt),
-    latest_response:
-      response_from_notes || clipResponsePreview(issue.latest_response),
-    response_pending: issue.response_pending && !response_from_notes
+    latest_prompt: clipPromptPreview(metadata_prompt),
+    latest_response: clipResponsePreview(metadata_response),
+    response_pending: metadata_pending
   };
 }
 
@@ -2004,6 +2068,18 @@ function renderModelChip(issue) {
  * @returns {string}
  */
 function deriveWorkerIdentity(issue) {
+  const metadata_worker = readMetadataValue(issue, [
+    'agent_name',
+    'agent.name',
+    'worker',
+    'worker_name',
+    'worker.name'
+  ]);
+  const metadata_pid = readMetadataValue(issue, [
+    'background_pid',
+    'background.pid',
+    'pid'
+  ]);
   const labels = Array.isArray(issue.labels) ? issue.labels : [];
   const pid_label = readLabelValue(labels, ['pid:', 'process:', 'worker-pid:']);
   const worker_label = readLabelValue(labels, [
@@ -2012,12 +2088,13 @@ function deriveWorkerIdentity(issue) {
     'runner:',
     'background-worker:'
   ]);
-  const worker = worker_label || issue.assignee || '';
-  if (worker && pid_label) {
-    return `${worker} · PID ${pid_label}`;
+  const worker = metadata_worker || worker_label || issue.assignee || '';
+  const pid = metadata_pid || pid_label;
+  if (worker && pid) {
+    return `${worker} · PID ${pid}`;
   }
-  if (pid_label) {
-    return `PID ${pid_label}`;
+  if (pid) {
+    return `PID ${pid}`;
   }
   return worker;
 }
@@ -2027,12 +2104,7 @@ function deriveWorkerIdentity(issue) {
  * @returns {string}
  */
 function deriveConversationId(issue) {
-  const metadata =
-    issue && typeof issue.metadata === 'object' && issue.metadata
-      ? /** @type {Record<string, unknown>} */ (issue.metadata)
-      : null;
-  const raw = metadata?.conversation_id;
-  return typeof raw === 'string' ? raw.trim() : '';
+  return readMetadataValue(issue, ['conversation_id', 'conversation.id']);
 }
 
 /**
@@ -2040,9 +2112,15 @@ function deriveConversationId(issue) {
  * @returns {'openai'|'claude'|'gemini'|''}
  */
 function deriveModelProvider(issue) {
+  const explicit = readMetadataValue(issue, [
+    'model_provider',
+    'model.provider'
+  ]);
   const labels = Array.isArray(issue.labels) ? issue.labels : [];
-  const explicit = readLabelValue(labels, [MODEL_PROVIDER_LABEL_PREFIX]);
-  const normalized = String(explicit || '').trim().toLowerCase();
+  const fallback = readLabelValue(labels, [MODEL_PROVIDER_LABEL_PREFIX]);
+  const normalized = String(explicit || fallback || '')
+    .trim()
+    .toLowerCase();
   if (
     normalized === 'openai' ||
     normalized === 'codex' ||
@@ -2074,8 +2152,12 @@ function deriveModelProvider(issue) {
  * @returns {string}
  */
 function deriveModelName(issue) {
-  const labels = Array.isArray(issue.labels) ? issue.labels : [];
-  return readLabelValue(labels, [MODEL_LABEL_PREFIX]);
+  return (
+    readMetadataValue(issue, ['model']) ||
+    readLabelValue(Array.isArray(issue.labels) ? issue.labels : [], [
+      MODEL_LABEL_PREFIX
+    ])
+  );
 }
 
 /**
@@ -2126,6 +2208,31 @@ function readLabelValue(labels, prefixes) {
 
 /**
  * @param {IssueLite} issue
+ * @param {string[]} keys
+ * @returns {string}
+ */
+function readMetadataValue(issue, keys) {
+  const metadata =
+    issue && typeof issue.metadata === 'object' && issue.metadata
+      ? /** @type {Record<string, unknown>} */ (issue.metadata)
+      : null;
+  if (!metadata) {
+    return '';
+  }
+  for (const key of keys) {
+    const raw = metadata[key];
+    if (typeof raw === 'string' && raw.trim()) {
+      return raw.trim();
+    }
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      return String(raw);
+    }
+  }
+  return '';
+}
+
+/**
+ * @param {IssueLite} issue
  * @returns {CardHealth}
  */
 function deriveCardHealth(issue) {
@@ -2140,8 +2247,8 @@ function deriveCardHealth(issue) {
       summary: ''
     };
   }
-  const runtime_ms = parseRuntimeLabel(issue.labels);
-  const heartbeat_ts = parseHeartbeatLabel(issue.labels);
+  const runtime_ms = parseRuntimeValue(issue);
+  const heartbeat_ts = parseHeartbeatValue(issue);
   const heartbeat_age_ms =
     Number.isFinite(heartbeat_ts) && heartbeat_ts !== null
       ? Date.now() - heartbeat_ts
@@ -2341,6 +2448,21 @@ function parseHeartbeatLabel(labels) {
 }
 
 /**
+ * @param {IssueLite} issue
+ * @returns {number|null}
+ */
+function parseHeartbeatValue(issue) {
+  const raw = readMetadataValue(issue, ['last_heartbeat', 'last.heartbeat']);
+  if (raw) {
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return parseHeartbeatLabel(issue.labels);
+}
+
+/**
  * @param {string[]|undefined} labels
  * @returns {number|null}
  */
@@ -2358,6 +2480,52 @@ function parseRuntimeLabel(labels) {
   /** @type {RegExpExecArray|null} */
   let match;
   while ((match = regex.exec(value))) {
+    matched = true;
+    const amount = Number(match[1]);
+    const unit = match[2];
+    if (unit === 'd') {
+      total += amount * 24 * 60 * 60 * 1000;
+    } else if (unit === 'h') {
+      total += amount * 60 * 60 * 1000;
+    } else if (unit === 'm') {
+      total += amount * 60 * 1000;
+    } else if (unit === 's') {
+      total += amount * 1000;
+    }
+  }
+  return matched ? total : null;
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {number|null}
+ */
+function parseRuntimeValue(issue) {
+  const raw = readMetadataValue(issue, ['time_alive', 'time.alive']);
+  if (raw) {
+    const parsed = parseDurationValue(raw);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  return parseRuntimeLabel(issue.labels);
+}
+
+/**
+ * @param {string} value
+ * @returns {number|null}
+ */
+function parseDurationValue(value) {
+  const safe = String(value || '').trim().toLowerCase();
+  if (!safe) {
+    return null;
+  }
+  const regex = /(\d+)\s*([dhms])/g;
+  let total = 0;
+  let matched = false;
+  /** @type {RegExpExecArray|null} */
+  let match;
+  while ((match = regex.exec(safe))) {
     matched = true;
     const amount = Number(match[1]);
     const unit = match[2];
