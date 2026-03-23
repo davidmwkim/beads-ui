@@ -1363,6 +1363,10 @@ input.inline-edit:focus {
 .board-card__worker {
   max-width: 100%;
 }
+.board-card__conversation {
+  max-width: 220px;
+  font-variant-numeric: tabular-nums;
+}
 .board-card__provider {
   width: 22px;
   height: 22px;

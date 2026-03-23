@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
-import { resolveDbPath } from './db.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { resolveDbPath, resolveWorkspaceDatabase } from './db.js';
 import { debug } from './logging.js';
 
 const log = debug('bd');
@@ -73,12 +75,14 @@ export function runBd(args, options = {}) {
  */
 function runBdUnlocked(args, options = {}) {
   const bin = getBdBin();
+  const requested_cwd = options.cwd || process.cwd();
+  const cwd = deriveCommandCwd(requested_cwd, args);
 
   // Set BEADS_DB only when the workspace has a local SQLite DB.
   // Do not force BEADS_DB from global fallback paths; this can override
   // backend autodetection in non-SQLite workspaces (for example Dolt).
   const db_path = resolveDbPath({
-    cwd: options.cwd || process.cwd(),
+    cwd,
     env: options.env || process.env
   });
   const env_with_db = { ...(options.env || process.env) };
@@ -86,8 +90,16 @@ function runBdUnlocked(args, options = {}) {
     env_with_db.BEADS_DB = db_path.path;
   }
 
+  const live_dolt = resolveLiveDoltRuntime(cwd, args, env_with_db);
+  if (live_dolt?.port && !env_with_db.BEADS_DOLT_PORT) {
+    env_with_db.BEADS_DOLT_PORT = live_dolt.port;
+  }
+  if (live_dolt?.host && !env_with_db.BEADS_DOLT_HOST) {
+    env_with_db.BEADS_DOLT_HOST = live_dolt.host;
+  }
+
   const spawn_opts = {
-    cwd: options.cwd || process.cwd(),
+    cwd,
     env: env_with_db,
     shell: false,
     windowsHide: true
@@ -170,6 +182,114 @@ function buildBdArgs(args) {
   }
 
   return ['--sandbox', ...args];
+}
+
+/**
+ * Prefer the live Dolt sidecar port when runtime files are present. This lets
+ * beads-ui talk to the active sidecar instead of a stale configured port.
+ *
+ * @param {string} cwd
+ * @param {string[]} args
+ * @param {Record<string, string | undefined>} env
+ * @returns {{ host: string, port: string } | null}
+ */
+function resolveLiveDoltRuntime(cwd, args, env) {
+  const explicit_db = extractExplicitDbArg(args, cwd);
+  const workspace = resolveWorkspaceDatabase({ cwd, env, explicit_db });
+  const workspace_path = workspace?.path || '';
+  if (!workspace_path || workspace_path.endsWith('.db')) {
+    return null;
+  }
+
+  const direct_port = readTextIfExists(path.join(workspace_path, 'dolt-server.port'));
+  const info_port = parseSqlServerInfo(
+    readTextIfExists(path.join(workspace_path, 'dolt', '.dolt', 'sql-server.info'))
+  );
+  const port = sanitizePort(direct_port) || sanitizePort(info_port);
+  if (!port) {
+    return null;
+  }
+  return { host: '127.0.0.1', port };
+}
+
+/**
+ * @param {string[]} args
+ * @param {string} cwd
+ * @returns {string | undefined}
+ */
+function extractExplicitDbArg(args, cwd) {
+  const index = args.indexOf('--db');
+  if (index === -1 || index + 1 >= args.length) {
+    return undefined;
+  }
+  const raw = String(args[index + 1] || '').trim();
+  if (!raw) {
+    return undefined;
+  }
+  return path.isAbsolute(raw) ? raw : path.resolve(cwd, raw);
+}
+
+/**
+ * When callers pass `--db /repo/.beads`, run `bd` from that workspace root so
+ * Dolt configuration resolution cannot drift to the process cwd.
+ *
+ * @param {string} cwd
+ * @param {string[]} args
+ * @returns {string}
+ */
+function deriveCommandCwd(cwd, args) {
+  const explicit_db = extractExplicitDbArg(args, cwd);
+  if (!explicit_db) {
+    return cwd;
+  }
+  const normalized = path.resolve(explicit_db);
+  if (normalized.endsWith(`${path.sep}.beads`) || path.basename(normalized) === '.beads') {
+    return path.dirname(normalized);
+  }
+  if (normalized.endsWith('.db')) {
+    return path.dirname(path.dirname(normalized));
+  }
+  return cwd;
+}
+
+/**
+ * @param {string} file_path
+ * @returns {string}
+ */
+function readTextIfExists(file_path) {
+  try {
+    return fs.readFileSync(file_path, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * @param {string} raw
+ * @returns {string}
+ */
+function parseSqlServerInfo(raw) {
+  if (!raw) {
+    return '';
+  }
+  const parts = String(raw).trim().split(':');
+  return parts.length >= 2 ? parts[1] : '';
+}
+
+/**
+ * @param {string} raw
+ * @returns {string}
+ */
+function sanitizePort(raw) {
+  const trimmed = String(raw || '').trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return '';
+  }
+  const port = Number(trimmed);
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    return '';
+  }
+  return String(port);
 }
 
 /**

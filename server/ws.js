@@ -596,6 +596,17 @@ export async function handleMessage(ws, data) {
   }
 
   const req = json;
+  const workspace_bd_options = {
+    cwd: CURRENT_WORKSPACE?.root_dir
+  };
+  const workspace_bd_args = (args) =>
+    CURRENT_WORKSPACE?.db_path
+      ? ['--db', CURRENT_WORKSPACE.db_path, ...args]
+      : args;
+  const runWorkspaceBd = (args) =>
+    runBd(workspace_bd_args(args), workspace_bd_options);
+  const runWorkspaceBdJson = (args) =>
+    runBdJson(workspace_bd_args(args), workspace_bd_options);
 
   // Dispatch known types here as we implement them. For now, only a ping utility.
   if (req.type === /** @type {MessageType} */ ('ping')) {
@@ -749,14 +760,16 @@ export async function handleMessage(ws, data) {
       return;
     }
     // Pass empty string to clear assignee when requested
-    const res = await runBd(['update', id, '--assignee', assignee]);
+    const res = await runWorkspaceBd(
+      ['update', id, '--assignee', assignee],
+    );
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
       );
       return;
     }
-    const shown = await runBdJson(['show', id, '--json']);
+    const shown = await runWorkspaceBdJson(['show', id, '--json']);
     if (shown.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', shown.stderr || 'bd failed'))
@@ -794,14 +807,16 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBd(['update', id, '--status', status]);
+    const res = await runWorkspaceBd(
+      ['update', id, '--status', status],
+    );
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
       );
       return;
     }
-    const shown = await runBdJson(['show', id, '--json']);
+    const shown = await runWorkspaceBdJson(['show', id, '--json']);
     if (shown.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', shown.stderr || 'bd failed'))
@@ -840,14 +855,16 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBd(['update', id, '--priority', String(priority)]);
+    const res = await runWorkspaceBd(
+      ['update', id, '--priority', String(priority)],
+    );
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
       );
       return;
     }
-    const shown = await runBdJson(['show', id, '--json']);
+    const shown = await runWorkspaceBdJson(['show', id, '--json']);
     if (shown.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', shown.stderr || 'bd failed'))
@@ -904,14 +921,14 @@ export async function handleMessage(ws, data) {
             : field === 'notes'
               ? '--notes'
               : '--design';
-    const res = await runBd(['update', id, flag, value]);
+    const res = await runWorkspaceBd(['update', id, flag, value]);
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
       );
       return;
     }
-    const shown = await runBdJson(['show', id, '--json']);
+    const shown = await runWorkspaceBdJson(['show', id, '--json']);
     if (shown.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', shown.stderr || 'bd failed'))
@@ -962,7 +979,7 @@ export async function handleMessage(ws, data) {
     if (typeof description === 'string' && description.length > 0) {
       args.push('-d', description);
     }
-    const res = await runBd(args);
+    const res = await runWorkspaceBd(args);
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
@@ -1000,7 +1017,7 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBd(['dep', 'add', a, b]);
+    const res = await runWorkspaceBd(['dep', 'add', a, b]);
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
@@ -1008,7 +1025,7 @@ export async function handleMessage(ws, data) {
       return;
     }
     const id = typeof view_id === 'string' && view_id.length > 0 ? view_id : a;
-    const shown = await runBdJson(['show', id, '--json']);
+    const shown = await runWorkspaceBdJson(['show', id, '--json']);
     if (shown.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', shown.stderr || 'bd failed'))
@@ -1044,7 +1061,7 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBd(['dep', 'remove', a, b]);
+    const res = await runWorkspaceBd(['dep', 'remove', a, b]);
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
@@ -1052,7 +1069,7 @@ export async function handleMessage(ws, data) {
       return;
     }
     const id = typeof view_id === 'string' && view_id.length > 0 ? view_id : a;
-    const shown = await runBdJson(['show', id, '--json']);
+    const shown = await runWorkspaceBdJson(['show', id, '--json']);
     if (shown.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', shown.stderr || 'bd failed'))
@@ -1088,14 +1105,16 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBd(['label', 'add', id, label.trim()]);
+    const res = await runWorkspaceBd(
+      ['label', 'add', id, label.trim()],
+    );
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
       );
       return;
     }
-    const shown = await runBdJson(['show', id, '--json']);
+    const shown = await runWorkspaceBdJson(['show', id, '--json']);
     if (shown.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', shown.stderr || 'bd failed'))
@@ -1131,14 +1150,16 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBd(['label', 'remove', id, label.trim()]);
+    const res = await runWorkspaceBd(
+      ['label', 'remove', id, label.trim()],
+    );
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
       );
       return;
     }
-    const shown = await runBdJson(['show', id, '--json']);
+    const shown = await runWorkspaceBdJson(['show', id, '--json']);
     if (shown.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', shown.stderr || 'bd failed'))
@@ -1154,6 +1175,28 @@ export async function handleMessage(ws, data) {
     return;
   }
 
+  // get-issue: payload { id: string }
+  if (req.type === 'get-issue') {
+    const { id } = /** @type {any} */ (req.payload || {});
+    if (typeof id !== 'string' || id.length === 0) {
+      ws.send(
+        JSON.stringify(
+          makeError(req, 'bad_request', 'payload requires { id: string }')
+        )
+      );
+      return;
+    }
+    const res = await runWorkspaceBdJson(['show', id, '--json']);
+    if (res.code !== 0) {
+      ws.send(
+        JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
+      );
+      return;
+    }
+    ws.send(JSON.stringify(makeOk(req, res.stdoutJson || [])));
+    return;
+  }
+
   // get-comments: payload { id: string }
   if (req.type === 'get-comments') {
     const { id } = /** @type {any} */ (req.payload || {});
@@ -1165,7 +1208,7 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBdJson(['comments', id, '--json']);
+    const res = await runWorkspaceBdJson(['comments', id, '--json']);
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
@@ -1198,13 +1241,13 @@ export async function handleMessage(ws, data) {
     }
 
     // Get git user name for author attribution
-    const author = await getGitUserName();
+    const author = await getGitUserName(workspace_bd_options);
     const args = ['comment', id, text.trim()];
     if (author) {
       args.push('--author', author);
     }
 
-    const res = await runBd(args);
+    const res = await runWorkspaceBd(args);
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(makeError(req, 'bd_error', res.stderr || 'bd failed'))
@@ -1213,7 +1256,7 @@ export async function handleMessage(ws, data) {
     }
 
     // Return updated comments list
-    const comments = await runBdJson(['comments', id, '--json']);
+    const comments = await runWorkspaceBdJson(['comments', id, '--json']);
     if (comments.code !== 0) {
       ws.send(
         JSON.stringify(
@@ -1237,7 +1280,7 @@ export async function handleMessage(ws, data) {
       );
       return;
     }
-    const res = await runBd(['delete', id, '--force']);
+    const res = await runWorkspaceBd(['delete', id, '--force']);
     if (res.code !== 0) {
       ws.send(
         JSON.stringify(

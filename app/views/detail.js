@@ -61,6 +61,7 @@ function formatCommentDate(dateStr) {
  * @property {(string|null)} [close_reason]
  * @property {string} [assignee]
  * @property {number} [priority]
+ * @property {Record<string, unknown>} [metadata]
  * @property {string[]} [labels]
  * @property {Dependency[]} [dependencies]
  * @property {Dependency[]} [dependents]
@@ -1090,6 +1091,15 @@ export function createDetailView(
         </div>`;
 
     // Labels section
+    const metadata =
+      issue && typeof issue.metadata === 'object' && issue.metadata
+        ? /** @type {Record<string, unknown>} */ (issue.metadata)
+        : {};
+    const conversation_id =
+      typeof metadata.conversation_id === 'string'
+        ? metadata.conversation_id
+        : '';
+
     const labels = Array.isArray(issue.labels) ? issue.labels : [];
     const labels_block = html`<div class="props-card labels">
       <div>
@@ -1308,6 +1318,12 @@ export function createDetailView(
                     }
                   </div>
                 </div>
+                ${conversation_id
+                  ? html`<div class="prop">
+                      <div class="label">Conversation</div>
+                      <div class="value"><code class="mono">${conversation_id}</code></div>
+                    </div>`
+                  : ''}
               </div>
               ${labels_block}
               ${depsSection('Dependencies', issue.dependencies || [])}

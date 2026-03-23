@@ -26,7 +26,8 @@ import { createTypeBadge } from '../utils/type-badge.js';
  *   notes?: string,
  *   latest_prompt?: string,
  *   latest_response?: string,
-  *   response_pending?: boolean
+ *   response_pending?: boolean,
+ *   metadata?: Record<string, unknown>
  * }} IssueLite
  */
 
@@ -309,8 +310,12 @@ export function createBoardView(
   let comment_timestamp_cache = new Map();
   /** @type {Map<string, { latest_prompt?: string, latest_response?: string, response_pending?: boolean }>} */
   let comment_preview_cache = new Map();
+  /** @type {Map<string, Record<string, unknown>|null>} */
+  let issue_metadata_cache = new Map();
   /** @type {Set<string>} */
   let pending_comment_fetches = new Set();
+  /** @type {Set<string>} */
+  let pending_issue_metadata_fetches = new Set();
   /** @type {Map<string, number>} */
   let previous_column_counts = new Map();
   /** @type {ReturnType<typeof setInterval>|null} */
@@ -451,6 +456,7 @@ export function createBoardView(
           ${renderModelProviderBadge(it)}
           ${renderModelChip(it)}
           ${renderWorkerChip(it)}
+          ${renderConversationChip(it)}
           ${runtime_label
             ? html`<span class="badge board-card__runtime">${runtime_label}</span>`
             : ''}
@@ -1101,6 +1107,49 @@ export function createBoardView(
   }
 
   /**
+   * @param {IssueLite[]} issues
+   */
+  function scheduleIssueMetadataRefresh(issues) {
+    if (board_debug_enabled || !transport) {
+      return;
+    }
+    for (const issue of issues) {
+      const issue_id = String(issue.id || '');
+      if (!issue_id) {
+        continue;
+      }
+      const cached = issue_metadata_cache.get(issue_id);
+      if (cached && typeof cached === 'object') {
+        issue.metadata = cached;
+      }
+      if (issue_metadata_cache.has(issue_id) || pending_issue_metadata_fetches.has(issue_id)) {
+        continue;
+      }
+      pending_issue_metadata_fetches.add(issue_id);
+      void transport('get-issue', { id: issue_id })
+        .then((result) => {
+          const shown = Array.isArray(result) ? result[0] : result;
+          const metadata =
+            shown && typeof shown === 'object' && shown.metadata && typeof shown.metadata === 'object'
+              ? /** @type {Record<string, unknown>} */ (shown.metadata)
+              : null;
+          issue_metadata_cache.set(issue_id, metadata);
+          const target = findIssueById(issue_id);
+          if (target) {
+            target.metadata = metadata || undefined;
+          }
+          doRender();
+        })
+        .catch(() => {
+          issue_metadata_cache.set(issue_id, null);
+        })
+        .finally(() => {
+          pending_issue_metadata_fetches.delete(issue_id);
+        });
+    }
+  }
+
+  /**
    * @param {string} issue_id
    * @returns {IssueLite|undefined}
    */
@@ -1359,6 +1408,12 @@ export function createBoardView(
         ...list_in_progress,
         ...list_closed_raw
       ]);
+      scheduleIssueMetadataRefresh([
+        ...list_blocked,
+        ...list_ready,
+        ...list_in_progress,
+        ...list_closed_raw
+      ]);
       applyClosedFilter();
       doRender();
     } catch {
@@ -1403,6 +1458,18 @@ export function createBoardView(
         list_in_progress = in_progress;
         list_closed_raw = closed;
       }
+      scheduleCommentMetadataRefresh([
+        ...list_blocked,
+        ...list_ready,
+        ...list_in_progress,
+        ...list_closed_raw
+      ]);
+      scheduleIssueMetadataRefresh([
+        ...list_blocked,
+        ...list_ready,
+        ...list_in_progress,
+        ...list_closed_raw
+      ]);
       applyClosedFilter();
       doRender();
     } catch {
@@ -1523,6 +1590,18 @@ export function createBoardView(
           list_blocked = blocked;
           list_in_progress = in_prog;
           list_closed_raw = closed;
+          scheduleCommentMetadataRefresh([
+            ...list_blocked,
+            ...list_ready,
+            ...list_in_progress,
+            ...list_closed_raw
+          ]);
+          scheduleIssueMetadataRefresh([
+            ...list_blocked,
+            ...list_ready,
+            ...list_in_progress,
+            ...list_closed_raw
+          ]);
           applyClosedFilter();
           doRender();
         }
@@ -1534,6 +1613,8 @@ export function createBoardView(
       stopDisplayTimer();
       stopDebugSimulation();
       pending_comment_fetches.clear();
+      pending_issue_metadata_fetches.clear();
+      issue_metadata_cache.clear();
       mount_element.replaceChildren();
       list_ready = [];
       list_blocked = [];
@@ -1874,6 +1955,23 @@ function renderWorkerChip(issue) {
  * @param {IssueLite} issue
  * @returns {import('lit-html').TemplateResult | string}
  */
+function renderConversationChip(issue) {
+  const conversation_id = deriveConversationId(issue);
+  if (!conversation_id) {
+    return '';
+  }
+  return html`<span
+    class="badge board-card__conversation mono"
+    title=${conversation_id}
+  >
+    Conv ${conversation_id}
+  </span>`;
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {import('lit-html').TemplateResult | string}
+ */
 function renderModelProviderBadge(issue) {
   const provider = deriveModelProvider(issue);
   if (!provider) {
@@ -1922,6 +2020,19 @@ function deriveWorkerIdentity(issue) {
     return `PID ${pid_label}`;
   }
   return worker;
+}
+
+/**
+ * @param {IssueLite} issue
+ * @returns {string}
+ */
+function deriveConversationId(issue) {
+  const metadata =
+    issue && typeof issue.metadata === 'object' && issue.metadata
+      ? /** @type {Record<string, unknown>} */ (issue.metadata)
+      : null;
+  const raw = metadata?.conversation_id;
+  return typeof raw === 'string' ? raw.trim() : '';
 }
 
 /**

@@ -153,6 +153,78 @@ describe('runBd', () => {
     const options = mockedSpawn.mock.calls[0][2];
     expect(options.env.BEADS_DB).toBe('/custom/workspace.db');
   });
+
+  test('prefers live dolt runtime port from workspace files', async () => {
+    const root = make_temp_dir();
+    const beads_dir = path.join(root, '.beads');
+    fs.mkdirSync(path.join(beads_dir, 'dolt', '.dolt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(beads_dir, 'metadata.json'),
+      JSON.stringify({ backend: 'dolt', database: 'dolt' })
+    );
+    fs.writeFileSync(path.join(beads_dir, 'dolt-server.port'), '43773\n');
+
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['list'], { cwd: root, env: {} });
+
+    const options = mockedSpawn.mock.calls[0][2];
+    expect(options.env.BEADS_DOLT_PORT).toBe('43773');
+    expect(options.env.BEADS_DOLT_HOST).toBe('127.0.0.1');
+  });
+
+  test('falls back to sql-server.info when dolt-server.port is missing', async () => {
+    const root = make_temp_dir();
+    const beads_dir = path.join(root, '.beads');
+    fs.mkdirSync(path.join(beads_dir, 'dolt', '.dolt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(beads_dir, 'metadata.json'),
+      JSON.stringify({ backend: 'dolt', database: 'dolt' })
+    );
+    fs.writeFileSync(
+      path.join(beads_dir, 'dolt', '.dolt', 'sql-server.info'),
+      '12345:36867:uuid\n'
+    );
+
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['list'], { cwd: root, env: {} });
+
+    const options = mockedSpawn.mock.calls[0][2];
+    expect(options.env.BEADS_DOLT_PORT).toBe('36867');
+    expect(options.env.BEADS_DOLT_HOST).toBe('127.0.0.1');
+  });
+
+  test('does not override explicit BEADS_DOLT_PORT from caller env', async () => {
+    const root = make_temp_dir();
+    const beads_dir = path.join(root, '.beads');
+    fs.mkdirSync(path.join(beads_dir, 'dolt', '.dolt'), { recursive: true });
+    fs.writeFileSync(
+      path.join(beads_dir, 'metadata.json'),
+      JSON.stringify({ backend: 'dolt', database: 'dolt' })
+    );
+    fs.writeFileSync(path.join(beads_dir, 'dolt-server.port'), '43773\n');
+
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['list'], {
+      cwd: root,
+      env: { BEADS_DOLT_PORT: '9999', BEADS_DOLT_HOST: '10.0.0.2' }
+    });
+
+    const options = mockedSpawn.mock.calls[0][2];
+    expect(options.env.BEADS_DOLT_PORT).toBe('9999');
+    expect(options.env.BEADS_DOLT_HOST).toBe('10.0.0.2');
+  });
+
+  test('aligns subprocess cwd to explicit workspace db path', async () => {
+    const original_root = make_temp_dir();
+    const target_root = make_temp_dir();
+    fs.mkdirSync(path.join(target_root, '.beads'), { recursive: true });
+
+    mockedSpawn.mockReturnValueOnce(makeFakeProc('ok', '', 0));
+    await runBd(['--db', path.join(target_root, '.beads'), 'list'], { cwd: original_root, env: {} });
+
+    const options = mockedSpawn.mock.calls[0][2];
+    expect(options.cwd).toBe(target_root);
+  });
 });
 
 describe('runBdJson', () => {
